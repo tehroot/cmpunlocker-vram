@@ -9,16 +9,21 @@ mkdir -p "${LOG_DIR}"
 LOG_FILE="${LOG_DIR}/install_$(date +%Y%m%d_%H%M%S).log"
 
 PROFILE_OVERRIDE=""
+PCIE_PROBE=0
 for arg in "$@"; do
     case "${arg}" in
         --profile=8gb|--profile=8GB) PROFILE_OVERRIDE="8gb" ;;
         --profile=10gb|--profile=10GB) PROFILE_OVERRIDE="10gb" ;;
+        --pcie-probe) PCIE_PROBE=1 ;;
         -h|--help)
             cat <<'EOF'
-Usage: sudo ./install.sh [--profile=8gb|10gb]
+Usage: sudo ./install.sh [--profile=8gb|10gb] [--pcie-probe]
 
   --profile=8gb   Force 8GB physical card → 64GB unlock geometry
   --profile=10gb  Force 10GB physical card → 40GB unlock geometry
+  --pcie-probe    EXPERIMENTAL: also build in the on-card LnkCap2 write probe
+                  (docs/05 Test 0). Off by default. Not needed for the unlock;
+                  only for investigating whether PCIe gen is fuse-locked.
 
 Without --profile, stock nvidia-smi memory.total selects the profile:
   ~8192 MiB  → 8gb / 64GB unlock
@@ -183,7 +188,12 @@ ok "Kernel headers present for $(uname -r)"
 
 step "Step 5/6: Building and installing patched modules"
 chmod +x "${SCRIPT_DIR}/driver/build.sh"
-CMPUNLOCKER_DRIVER_VERSION="${detected}" CMPUNLOCKER_CARD_PROFILE="${CARD_PROFILE}" "${SCRIPT_DIR}/driver/build.sh"
+if [[ "${PCIE_PROBE}" -eq 1 ]]; then
+    warn "EXPERIMENTAL: --pcie-probe enabled — building in the on-card LnkCap2 write probe (docs/05 Test 0)."
+    warn "This is for PCIe-gen investigation only and is not part of the normal unlock."
+fi
+CMPUNLOCKER_DRIVER_VERSION="${detected}" CMPUNLOCKER_CARD_PROFILE="${CARD_PROFILE}" \
+    CMPUNLOCKER_PCIE_PROBE="${PCIE_PROBE}" "${SCRIPT_DIR}/driver/build.sh"
 ok "Patched modules installed (profile ${CARD_PROFILE})"
 
 step "Step 6/6: Done"

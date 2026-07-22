@@ -12,6 +12,24 @@ compute:
   ss0: "0x88888888"
   ss1: "0x00000008"
 
+# EXPERIMENTAL — reference only, consumed by nothing at build/install time.
+# Used by driver/patches/experimental/0007-pcie-gen-probe.patch (opt-in via
+# CMPUNLOCKER_PCIE_PROBE=1 / install.sh --pcie-probe) and docs/05 Test 0.
+# BAR0 XVE mirror = 0x14088000 + PCIe-cap cfg offset; Express-cap base = 0x78.
+pcie:
+  registers:
+    link_cap:    "0x14088084"  # LnkCap  (cfg 0x84); max link speed = bits 3:0 (1=Gen1..4=Gen4)
+    link_cap2:   "0x140880a4"  # LnkCap2 (cfg 0xa4); supported-speeds vector = bits 7:1
+    link_ctlsta: "0x14088088"  # LnkCtl (bits 15:0) + LnkSta (bits 31:16); retrain = LnkCtl bit 5; current speed = LnkSta bits 3:0
+    link_ctl2:   "0x140880a8"  # LnkCtl2 (cfg 0xa8); target link speed = bits 3:0
+  # LnkCap2 supported-link-speeds vector, bits 7:1 (bit1=Gen1 .. bit4=Gen4)
+  speeds:
+    gen1:   "0x00000002"  # bit 1 = 2.5 GT/s
+    gen2:   "0x00000004"  # bit 2 = 5.0 GT/s
+    gen3:   "0x00000008"  # bit 3 = 8.0 GT/s
+    gen4:   "0x00000010"  # bit 4 = 16.0 GT/s
+    gen1_4: "0x0000001E"  # bits 4:1 = Gen1+Gen2+Gen3+Gen4
+
 profiles:
   "8gb":
     stock_mib: 8192
