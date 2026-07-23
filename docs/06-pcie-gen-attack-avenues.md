@@ -67,20 +67,27 @@ then combined with #2 it's a no-op target. Cheap experiment; likely clamps; curr
 
 ## Hardware avenues
 
-### #4 — Retimer interposer  — *only path currently known to be physically real*
-Works at the link-training layer, *below* the fuse: a protocol-aware retimer (Astera Aries / TI
-DS160PR810 class) rewrites the Rate ID in the TS1/TS2 ordered sets during training, forcing both ends to
-negotiate up. Viable **iff** the SerDes physically trains above the fused rate — plausible (A100 silicon)
-but unproven. Custom interposer PCB, multi-month; it does not fight the fuse, it sidesteps it.
+### #4 — Retimer interposer  — *downgraded by on-hardware data*
+A protocol-aware retimer (Astera Aries / TI DS160PR810 class) rewrites the Rate ID in the TS1/TS2 ordered
+sets during training. This assumed the block was at the **advertisement/negotiation** layer. But
+[doc 09](09-onhw-pcie-gen-beta-result.md) shows the block is at the **LTSSM/fuse**: the endpoint refuses
+to train Gen2 even when its *own* advertised cap and target speed already say Gen2. A retimer can rewrite
+what the *partner* offers, but the GPU-facing segment still trains with the GPU's fuse-clamped LTSSM — so
+it likely can't raise the GPU-side rate either. Only worth pursuing if the AER screen (remove `pci=noaer`)
+or a PLL probe shows the SerDes *attempts* Gen2 and falls back. Custom interposer PCB, multi-month, and
+now lower-probability.
 
 ### #5 — Board-strap check
 Some PCIe gen limits are set by board straps (resistors / boot GPIOs), not fuses. Low probability given
 the fuse finding, but *cheap* to check and re-strap. Diff the 170HX board's strap config against an A100's.
 
-### #6 — Fault/glitch injection on the HS signature verify
-Voltage/clock-glitch the Falcon during the RSA-3072 signature check to bypass it and load modified
-VBIOS/GSP-RM (OMGVflash-adjacent). Serious rig, precise timing, physical access. Real technique, low
-probability, high payoff (enables actual firmware mods, GA100-wide).
+### #6 — DFA key extraction / fault injection on the content MAC
+Verification is a **symmetric MAC, not RSA** ([doc 08](08-vbios-mac-fuse-map-external.md)), so the
+firmware-mod path is **DFA voltage-glitching to recover `csecret(2)`** (→ MAC-forge a VBIOS carrying the
+CFG1 memory tier and PCIe-speed bytes) or `csecret(0)` (→ debug HULK, all verification off). Serious rig,
+precise timing, physical access — but a known attack class, not the RSA wall. Doc 08 also documents two
+*non-glitch* wins that don't need this: a **CH341A 250→300 W power unlock** (unsigned tail) and
+**HULK-cert injection** targeting `FUSE_FEATURE_OVERRIDE 0x823800` (a persistent version of the compute unlock).
 
 ## Honest dead ends
 - **Un-blow the eFuse** — `GEN23_DIS=1` is a *blown* bit; eFuses blow 0→1 and are irreversible.

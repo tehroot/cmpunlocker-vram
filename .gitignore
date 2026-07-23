@@ -39,3 +39,7 @@ credentials.json
 driver/.build/
 logs/
 *.tar.gz
+
+# Third-party Ghidra RE tooling (external; set up per docs/04, not vendored)
+GhidraMCP/
+ghidra_falcon/

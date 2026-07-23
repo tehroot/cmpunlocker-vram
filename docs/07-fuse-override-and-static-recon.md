@@ -98,3 +98,8 @@ Secure Boot / lockdown off, `fusedump` built, **both a 170HX and a reference A10
 read via the RO feature-readout path, `LnkCap2` never firmware-touched) leans dead. But the recon is
 near-free, and a positive Q1 would reopen the entire PCIe-gen question — so characterising #1 is the first
 thing to do on the card, right after the doc 05 Test 0/Test 1 reads.
+
+**External update ([doc 08](08-vbios-mac-fuse-map-external.md)):** the JRex286 VBIOS analysis reports
+`EN_SW_OVERRIDE` is **"inert / cannot change"** and the CTRL_OPT fuse-override table reads **all-zeros on
+13 GA100 cards** — i.e. Q1 resolves *fuse-side* on their evidence, dropping #1's odds further. Keep the
+live Q1 write-test as confirmation, not a hopeful bet.

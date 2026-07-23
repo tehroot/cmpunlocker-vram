@@ -140,6 +140,12 @@ highest-leverage *physical* mod and doesn't depend on any firmware/fuse question
   can only be answered by the retimer experiment itself.
 
 ## Firmware-frontier (if pursuing the signing angle — low probability)
+> **Update — [doc 08](08-vbios-mac-fuse-map-external.md):** external RE shows the VBIOS content check is a
+> **symmetric MAC, not RSA-3072**, so the real frontier is **DFA key extraction** (`csecret(2)` → MAC
+> forgery → VBIOS memory/PCIe unlock; `csecret(0)` → debug-HULK all-bypass) — hard but a known attack
+> class, not the RSA wall assumed below. Doc 08 also adds two non-glitch wins: a CH341A power unlock and
+> HULK-cert injection.
+
 GA100 uses **FalconUCodeDescV2** (Turing lineage, the generation OMGVflash broke) — the community's
 "most actionable" firmware-signing lead. The FwSec HS secure tails (`fwsec/fwsec_*_sec.bin`) are the
 target; `ghidra_falcon` + `ghidra` (now installed) is the tool. Honest assessment: this is the

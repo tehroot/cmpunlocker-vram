@@ -79,7 +79,11 @@ cmpunlocker's single superpower is **"write any PLM-protected register."** That 
 - **Compute** — a fuse sets the default throttle, but `SS0`/`SS1` (`0x0082381c`/`0x00823820`) are
   *writable feature-override* registers → the exploit overrides them.
 - **Memory** — the HBM is *physically present*; geometry is a *writable config register*
-  (`CFG1`/`LMR`) → the exploit reconfigures the controller to expose it.
+  (`CFG1`/`LMR`) → the exploit reconfigures the controller to expose it. **⚠ Capacity caveat:** external
+  VBIOS analysis puts physical HBM at **32 GB (8 GB SKU) / 40 GB (10 GB SKU)** — so the 10 GB→40 GB unlock
+  (tier 66) matches physical, but the 8 GB→**64 GB** unlock (tier 77) appears to *double* the 32 GB
+  physical and likely aliases above 32 GB. Verify before trusting the 8 GB default — see
+  [doc 08](08-vbios-mac-fuse-map-external.md).
 - **PCIe gen** — gated by an **OTP fuse feeding a hardware-set `LnkCap2`** that firmware never writes.
   There is **no register to override** (see doc 02/03). A register-write primitive can't touch it, and
   a fuse can't be rewritten (`FUSE_EN_SW_OVERRIDE = 0` on this SKU).

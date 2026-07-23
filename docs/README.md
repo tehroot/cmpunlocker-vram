@@ -13,6 +13,8 @@ the `cmpunlocker-vram` tool, and the PCIe-generation lock question.
 | [`05-open-questions-and-hardware-tests.md`](05-open-questions-and-hardware-tests.md) | Unresolved questions + on-card test protocols for when the 170HX arrives |
 | [`06-pcie-gen-attack-avenues.md`](06-pcie-gen-attack-avenues.md) | First-pass experiment plan: ranked PCIe-gen attack avenues if Test 0 fails (software #1–3, hardware #4–6, dead ends) |
 | [`07-fuse-override-and-static-recon.md`](07-fuse-override-and-static-recon.md) | Deep dive on avenue #1 (fuse-override enable) + static fuse-map recon from the VBIOS + the targeted on-card 4-register check |
+| [`08-vbios-mac-fuse-map-external.md`](08-vbios-mac-fuse-map-external.md) | Integrates external VBIOS RE (JRex286 gist): symmetric-MAC verification (not RSA), CFG1 tier nibbles + the 8 GB→64 GB aliasing flag, full fuse map, power/HULK/DFA avenues |
+| [`09-onhw-pcie-gen-beta-result.md`](09-onhw-pcie-gen-beta-result.md) | First on-hardware PCIe-gen unlock attempt (beta branch): advertises Gen2 / trains Gen1, the gen fuse `OPT_GEN23 @ 0x82057c` write **fails** — software gen unlock confirmed dead |
 
 ## Executive summary
 

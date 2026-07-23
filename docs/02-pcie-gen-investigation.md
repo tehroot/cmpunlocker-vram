@@ -35,6 +35,10 @@ matches the community's empirical measurement. The only avenues are hardware: th
   (no TOCTOU — DMA-time verification). Conclusion: *"every software-only avenue eliminated."*
 - **`the-falcon-security-architecture`**: Ampere HS signing (SHA-256 + RSA-3072) unbroken; GA100 uses
   **FalconUCodeDescV2** (Turing lineage, the generation OMGVflash exploited).
+  **[Correction — see [doc 08](08-vbios-mac-fuse-map-external.md)]:** external Booter disassembly shows the
+  VBIOS *content* integrity check is a **symmetric MAC** (Davies-Meyer + AES-KDF), not RSA — forgeable by
+  extracting `csecret(2)` via DFA glitching. RSA-3072 is the *ucode-descriptor* layer; the content check
+  that gates a modified VBIOS is the MAC, which reframes the firmware-mod frontier as key extraction.
 - **`what-has-been-bypassed`**: PCIe Gen1 = BLOCKED; NVLink = BLOCKED (fuse + missing PCB); memory =
   "UNPROVEN"; compute FMA = app-layer workaround only.
 - **`open-research-problems`**: rates GA100-V2 / FwSec analysis "most actionable"; suggests comparing
@@ -85,6 +89,12 @@ fused ceiling is Gen1 or Gen2.** If the fuse leaves Gen2 in the supported set, r
 *negotiating up to the fused max via a directed retrain*, fully consistent with the cap being fused.
 If `LnkCap2` is truly Gen1-only, then per PCIe spec Gen2 isn't negotiable at all and the "Gen2" claim
 is overstated (the better-supported reading, given the community's careful evidence).
+
+**Resolved on hardware ([doc 09](09-onhw-pcie-gen-beta-result.md)):** a beta branch made the card
+*advertise* Gen2 at every layer (`CAP`, `CAP2`, `LC2`) and it still **trained Gen1 x4** (`speed=1`). It
+also found the fuse — `OPT_GEN23` @ `0x82057c` = `0x1` — and its write to `0x0` **failed**. So both
+readings were right: the card can be made to *advertise* Gen2, but the fuse clamps the *trained* rate.
+The "Max Generation: 2" reports are the advertised cap; the real link is Gen1.
 
 - **Certain:** Gen3/4 are fused out. Software cannot exceed the fused ceiling.
 - **Unresolved:** Gen1 vs Gen2 fused ceiling — resolvable only by reading `LnkCap2` on the card
