@@ -75,23 +75,6 @@ for p in "${patches[@]}"; do
 done
 ok "All patches applied"
 
-# Experimental patches are opt-in only. They are NOT applied by a normal install;
-# they live in patches/experimental/ and are excluded by the *.patch glob above.
-if [[ "${CMPUNLOCKER_PCIE_PROBE:-0}" == "1" ]]; then
-    exp_patches=("${PATCH_DIR}"/experimental/*.patch)
-    if [[ ${#exp_patches[@]} -gt 0 ]]; then
-        warn "CMPUNLOCKER_PCIE_PROBE=1 — applying EXPERIMENTAL PCIe-gen probe patch(es)."
-        warn "This adds an on-card LnkCap2 write experiment to the unlock path (see docs/05)."
-        for p in "${exp_patches[@]}"; do
-            info "  experimental/$(basename "${p}")"
-            patch -p1 < "${p}"
-        done
-        ok "Experimental patches applied"
-    else
-        warn "CMPUNLOCKER_PCIE_PROBE=1 set but no patches in ${PATCH_DIR}/experimental"
-    fi
-fi
-
 PROFILE="${CMPUNLOCKER_CARD_PROFILE:-8gb}"
 GSP_C="${SRC_DIR}/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c"
 [[ -f "${GSP_C}" ]] || die "Missing ${GSP_C} after patching"
