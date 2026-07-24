@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,277 @@
+@@ -4942,6 +4942,301 @@
                        devId);
          }
  
@@ -223,6 +223,30 @@
 +                          g3s80, g3s84, g3cya0, g3cya1, g3opt3, g3lc0, g3cap2);
 +            }
 +            /* ===== END GEN3 PROBE (read-only: no writes, no retrain) ===== */
++
++            /* ===== SMBPBI MSGBOX REACHABILITY (read-only; see docs/15) =====
++               NV_THERM_MSGBOX_COMMAND = 0x660e0 (nvswitch lr10 dev_therm.h:45 --
++               cross-SKU inference; GA100 dev_therm.h is curated out). DATA/EXT_DATA
++               offsets are unpublished, so dump the adjacent dwords as bisection
++               candidates. Plausible value => mailbox is host-reachable, and Phase 0.5
++               (NULL_CMD then GET_CAP_DWORD) can test whether the PMU services a
++               host-written doorbell. 0xBADF1100 => priv-poisoned from driver context,
++               same class as 0x85080 -- fall back to SMBus (slot pins B5/B6). */
++            {
++                NvU32 mbCmd = GPU_REG_RD32(pGpu, 0x000660E0U);
++                NvU32 mbD1  = GPU_REG_RD32(pGpu, 0x000660E4U);
++                NvU32 mbD2  = GPU_REG_RD32(pGpu, 0x000660E8U);
++                NvU32 mbD3  = GPU_REG_RD32(pGpu, 0x000660ECU);
++                NvU32 mbD4  = GPU_REG_RD32(pGpu, 0x000660F0U);
++                NV_PRINTF(LEVEL_ERROR,
++                          "SEC2_DEBUG: GEN3_P0 MSGBOX cmd(0x660e0)=0x%08x "
++                          "e4=0x%08x e8=0x%08x ec=0x%08x f0=0x%08x "
++                          "(0xbadf -> walled; else CMD STATUS=[28:24] INTR=[31]; "
++                          "next: NULL_CMD=0x80000000 GET_CAP_DWORD=0x80000201 "
++                          "PAGE_6_LTSSM=0x80000621)\n",
++                          mbCmd, mbD1, mbD2, mbD3, mbD4);
++            }
++            /* ===== END SMBPBI PROBE (read-only) ===== */
 +
 +            {
 +                NvU32 lc2 = GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CTRL_2_ADDR);
