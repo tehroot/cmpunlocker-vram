@@ -15,6 +15,9 @@ the `cmpunlocker-vram` tool, and the PCIe-generation lock question.
 | [`07-fuse-override-and-static-recon.md`](07-fuse-override-and-static-recon.md) | Deep dive on avenue #1 (fuse-override enable) + static fuse-map recon from the VBIOS + the targeted on-card 4-register check |
 | [`08-vbios-mac-fuse-map-external.md`](08-vbios-mac-fuse-map-external.md) | Integrates external VBIOS RE (JRex286 gist): symmetric-MAC verification (not RSA), CFG1 tier nibbles + the 8 GB→64 GB aliasing flag, full fuse map, power/HULK/DFA avenues |
 | [`09-onhw-pcie-gen-beta-result.md`](09-onhw-pcie-gen-beta-result.md) | First on-hardware PCIe-gen attempt (beta): advertises Gen2 / trains Gen1; pins the gen fuse `OPT_GEN23 @ 0x82057c`, but the write never enabled `EN_SW_OVERRIDE` first — override path **untested**, not dead |
+| [`10-gen2-breakthrough-hypothesis.md`](10-gen2-breakthrough-hypothesis.md) | **CONFIRMED** Gen2 mechanism: minimal sequence (`0x8C2C0` DIS_G2 + `0x8C040` MAX_RATE + LTSSM + **upstream-driven** retrain), why each piece is load-bearing, and the reconstructed discovery methodology (redacted-header Rosetta Stone + RM disasm + open-source breadcrumbs + on-card bisection) |
+| [`11-debian-build-notes.md`](11-debian-build-notes.md) | Building the patched nvidia-open modules on Debian trixie: the split-headers → conftest-blindness fix (merge `-common` into the build tree). Wrapped in the one-shot [`debian13-setup.sh`](../debian13-setup.sh) |
+| [`12-gen3-attack-plan.md`](12-gen3-attack-plan.md) | **Gen3 theorycraft** (5-agent synthesis): register deltas are trivial + EQ is likely firmware-handled → it all gates on whether the fuse is terminal or enforcement-only. Ranked experiment ladder front-loaded by reading the uncaptured `OPT_GEN3 @ 0x820580` fuse; runnable [`recon/gen3-probe.sh`](../recon/gen3-probe.sh) |
 
 ## Executive summary
 
