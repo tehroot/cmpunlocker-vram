@@ -1,0 +1,133 @@
+
+============================================================
+0. Environment
+============================================================
+date:        Thu Jul 23 08:33:58 PM EDT 2026
+kernel:      Linux huge-dumb 6.12.90+deb13.1-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.90-2 (2026-05-27) x86_64 GNU/Linux
+euid:        0  (root)
+lockdown:    [none] integrity confidentiality
+secureboot:  SecureBoot disabled
+GPU BDF:     0000:05:00.0   (10de:20c2)
+
+============================================================
+1. Identity
+============================================================
+0000:05:00.0 3D controller [0302]: NVIDIA Corporation GA100 [CMP 170HX] [10de:20c2] (rev a1)
+-- /proc/driver/nvidia/version --
+NVRM version: NVIDIA UNIX x86_64 Kernel Module  550.163.01  Tue Apr  8 12:41:17 UTC 2025
+GCC version:  gcc version 14.2.0 (Debian 14.2.0-19) 
+-- nvidia-smi identity/memory (STOCK values) --
+name, driver_version, vbios_version, pci.bus_id, memory.total [MiB], pcie.link.gen.max, pcie.link.gen.current, pcie.link.width.max, pcie.link.width.current
+NVIDIA Graphics Device, 550.163.01, 92.00.6D.00.0A, 00000000:05:00.0, 8192 MiB, 2, 1, 16, 4
+
+============================================================
+2. PCIe link / generation  (Test 1: settles Gen1 vs Gen2 fused ceiling)
+============================================================
+raw:  LnkCap=0x00456101  LnkCap2=0x00000002  LnkCtl/Sta=0x10410140  LnkCtl2/Sta2=0x00000001
+  LnkCap max speed field (bits 3:0) = 1  (1=Gen1 2=Gen2 3=Gen3 4=Gen4)
+  LnkCap2 supported-speeds vector = 0x1  => Gen1 
+  >>> This is THE fused gen ceiling. 'Gen1' only = software dead-end confirmed;
+  >>>  'Gen1 Gen2' = Gen2 x16 (~8 GB/s) is on the table with the caps mod.
+  LnkSta current speed=1 (1=Gen1..4=Gen4)  negotiated width=x4
+-- lspci -vvv link lines --
+  		LnkCap:	Port #0, Speed 2.5GT/s, Width x16, ASPM not supported
+  		LnkCtl:	ASPM Disabled; RCB 64 bytes, LnkDisable- CommClk+
+  		LnkSta:	Speed 2.5GT/s, Width x4 (downgraded)
+  		LnkCap2: Supported Link Speeds: 2.5GT/s, Crosslink- Retimer- 2Retimers- DRS-
+  		LnkCtl2: Target Link Speed: 2.5GT/s, EnterCompliance- SpeedDis-
+  		LnkSta2: Current De-emphasis Level: -6dB, EqualizationComplete- EqualizationPhase1-
+
+============================================================
+3. BAR layout / Resizable BAR / Above-4G  (the ReBAR question)
+============================================================
+-- kernel-assigned BAR resources (/sys/bus/pci/devices/0000:05:00.0/resource: start end flags) --
+  BAR0: 0x0000000091000000 0x0000000091ffffff 0x0000000000040200
+  BAR1: 0x000003bff8000000 0x000003bffbffffff 0x000000000014220c
+  BAR2: 0x0000000000000000 0x0000000000000000 0x0000000000000000
+  BAR3: 0x000003bffc000000 0x000003bffdffffff 0x000000000014220c
+  BAR4: 0x0000000000000000 0x0000000000000000 0x0000000000000000
+  BAR5: 0x0000000000000000 0x0000000000000000 0x0000000000000000
+  (a BAR whose start >= 0x100000000 is mapped above 4GB => Above-4G Decoding is ON & working)
+
+-- lspci Region (BAR) sizes + flags --
+  	Region 0: Memory at 91000000 (32-bit, non-prefetchable) [size=16M]
+  	Region 1: Memory at 3bff8000000 (64-bit, prefetchable) [size=64M]
+  	Region 3: Memory at 3bffc000000 (64-bit, prefetchable) [size=32M]
+
+-- Physical Resizable BAR capability (advertised BAR1 max = the ReBAR ceiling) --
+  	Capabilities: [bb0 v1] Physical Resizable BAR
+  		BAR 0: current size: 16MB, supported: 16MB
+  		BAR 1: current size: 64MB, supported: 64MB
+  		BAR 3: current size: 32MB, supported: 32MB
+  	Kernel driver in use: nvidia
+  	Kernel modules: nvidia
+  
+  >>> 'BAR 1 ... supported:' lists the sizes the GPU advertises. The LARGEST entry is the
+  >>>  hard cap on how much VRAM the CPU can map — analogous to the fused PCIe-gen ceiling.
+  >>>  If it tops out well below the unlocked FB (64GB/40GB), ReBAR can never expose it all.
+
+-- nvidia-smi BAR1 --
+      BAR1 Memory Usage
+          Total                             : 64 MiB
+          Used                              : 5 MiB
+          Free                              : 59 MiB
+-- /proc/iomem ranges for this GPU (needs root) --
+      91000000-91ffffff : 0000:05:00.0
+      3bff8000000-3bffbffffff : 0000:05:00.0
+      3bffc000000-3bffdffffff : 0000:05:00.0
+-- dmesg: BAR assignment / reservation / ReBAR messages --
+  [    0.526609] pci 0000:02:00.0: BAR 0 [mem 0x92a30000-0x92a3ffff 64bit pref]
+  [    0.526637] pci 0000:02:00.0: BAR 2 [mem 0x92a40000-0x92a4ffff 64bit pref]
+  [    0.526665] pci 0000:02:00.0: BAR 4 [mem 0x92a50000-0x92a5ffff 64bit pref]
+  [    0.527122] pci 0000:02:00.1: BAR 0 [mem 0x92a00000-0x92a0ffff 64bit pref]
+  [    0.527150] pci 0000:02:00.1: BAR 2 [mem 0x92a10000-0x92a1ffff 64bit pref]
+  [    0.527178] pci 0000:02:00.1: BAR 4 [mem 0x92a20000-0x92a2ffff 64bit pref]
+  [    0.527712] pci 0000:03:00.0: BAR 0 [mem 0x92b30000-0x92b3ffff 64bit pref]
+  [    0.527741] pci 0000:03:00.0: BAR 2 [mem 0x92b40000-0x92b4ffff 64bit pref]
+  [    0.527769] pci 0000:03:00.0: BAR 4 [mem 0x92b50000-0x92b5ffff 64bit pref]
+  [    0.528261] pci 0000:03:00.1: BAR 0 [mem 0x92b00000-0x92b0ffff 64bit pref]
+  [    0.528289] pci 0000:03:00.1: BAR 2 [mem 0x92b10000-0x92b1ffff 64bit pref]
+  [    0.528317] pci 0000:03:00.1: BAR 4 [mem 0x92b20000-0x92b2ffff 64bit pref]
+  [    0.528899] pci 0000:0c:00.0: BAR 0 [mem 0x92c00000-0x92c03fff 64bit]
+  [    0.536491] pci 0000:80:04.0: BAR 0 [mem 0x3fffff1c000-0x3fffff1ffff 64bit]
+  [    0.536629] pci 0000:80:04.1: BAR 0 [mem 0x3fffff18000-0x3fffff1bfff 64bit]
+  [    0.536764] pci 0000:80:04.2: BAR 0 [mem 0x3fffff14000-0x3fffff17fff 64bit]
+  [    0.536897] pci 0000:80:04.3: BAR 0 [mem 0x3fffff10000-0x3fffff13fff 64bit]
+  [    0.537033] pci 0000:80:04.4: BAR 0 [mem 0x3fffff0c000-0x3fffff0ffff 64bit]
+  [    0.537172] pci 0000:80:04.5: BAR 0 [mem 0x3fffff08000-0x3fffff0bfff 64bit]
+  [    0.537305] pci 0000:80:04.6: BAR 0 [mem 0x3fffff04000-0x3fffff07fff 64bit]
+  [    0.537438] pci 0000:80:04.7: BAR 0 [mem 0x3fffff00000-0x3fffff03fff 64bit]
+  [    0.537905] pci 0000:80:05.4: BAR 0 [mem 0xc8400000-0xc8400fff]
+  [    0.539705] pci 0000:83:00.0: BAR 0 [mem 0xc8300000-0xc8303fff 64bit]
+  [    0.540230] pci 0000:85:00.0: BAR 0 [mem 0xc8200000-0xc8203fff 64bit]
+  [    0.540720] pci 0000:86:00.0: BAR 0 [mem 0xc8100000-0xc8107fff 64bit]
+  [    0.541092] pci 0000:87:00.0: BAR 5 [mem 0xc8000000-0xc80003ff]
+  [    0.579208] pci 0000:01:00.0: ROM [mem size 0x00100000 pref]: can't assign; no space
+  [    0.579211] pci 0000:01:00.0: ROM [mem size 0x00100000 pref]: failed to assign
+  [    0.591337] pci 0000:05:00.0: Adding to iommu group 49
+  [   13.566555] [drm] Initialized nvidia-drm 0.0.0 for 0000:05:00.0 on minor 1
+
+============================================================
+4. PCIe capabilities / AtomicOps / ACS (context for BAR + P2P behavior)
+============================================================
+  		DevCap:	MaxPayload 256 bytes, PhantFunc 0, Latency L0s unlimited, L1 <64us
+  		DevCtl:	CorrErr+ NonFatalErr+ FatalErr+ UnsupReq+
+  		DevCap2: Completion Timeout: Range AB, TimeoutDis+ NROPrPrP- LTR-
+  			 AtomicOpsCap: 32bit- 64bit- 128bitCAS-
+  		DevCtl2: Completion Timeout: 65ms to 210ms, TimeoutDis-
+  			 AtomicOpsCtl: ReqEn-
+  			ECRC- UnsupReq- ACSViol- UncorrIntErr- BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+  			ECRC- UnsupReq- ACSViol- UncorrIntErr- BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+  			ECRC- UnsupReq- ACSViol- UncorrIntErr+ BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+
+============================================================
+5. Fuse / feature-override reads — SKIPPED
+============================================================
+Re-run with '--fuse' to include targeted read-only fuse/feature MMIO reads
+(only if Secure Boot / kernel lockdown is OFF). Everything above is pure config-space/sysfs.
+
+============================================================
+Done
+============================================================
+Wrote: recon-170hx-20260723_203358.txt
+Please send this file back. Nothing on the card was modified.
