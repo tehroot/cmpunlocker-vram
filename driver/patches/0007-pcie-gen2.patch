@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,260 @@
+@@ -4942,6 +4942,289 @@
                        devId);
          }
  
@@ -206,6 +206,35 @@
 +                          GPU_REG_RD32(pGpu, PCIE_GEN2_VSEC_HIERARCHY_ADDR),
 +                          GPU_REG_RD32(pGpu, PCIE_GEN2_VSEC_DEVICE_ADDR));
 +            }
++
++            /* ===== GEN3 PHASE 0/1 PROBE (read-only dump + retrain-free advertise; self-restoring) ===== */
++            {
++                NvU32 g3s80  = GPU_REG_RD32(pGpu, 0x00085080U);
++                NvU32 g3s84  = GPU_REG_RD32(pGpu, 0x00085084U);
++                NvU32 g3cya0 = GPU_REG_RD32(pGpu, 0x0008C2C0U);
++                NvU32 g3cya1 = GPU_REG_RD32(pGpu, 0x0008C300U);
++                NvU32 g3opt3 = GPU_REG_RD32(pGpu, 0x00820580U);
++                NvU32 g3lc0  = GPU_REG_RD32(pGpu, 0x0008C040U);
++                NvU32 g3cap2 = GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR);
++                NV_PRINTF(LEVEL_ERROR,
++                          "SEC2_DEBUG: GEN3_P0 s80=0x%08x s84=0x%08x CYA0=0x%08x CYA1=0x%08x "
++                          "OPT_GEN3=0x%08x LINK_CFG0=0x%08x CAP2=0x%08x "
++                          "(s80/s84=0xbadf -> driver-ctx walled; CYA0 bit>2 set -> DIS_G3 exists)\n",
++                          g3s80, g3s84, g3cya0, g3cya1, g3opt3, g3lc0, g3cap2);
++                /* Phase 1: transient MAX_RATE=3 + clear DIS_G2 and DIS_G3 candidate (bit3).
++                   NO TargetLinkSpeed, NO retrain -> LnkCap2 reflection only, cannot wedge. */
++                GPU_REG_WR32(pGpu, 0x0008C2C0U, g3cya0 & ~((1U << 2) | (1U << 3)));
++                GPU_REG_WR32(pGpu, 0x0008C040U, (g3lc0 & ~0x000C0000U) | (3U << 18));
++                NV_PRINTF(LEVEL_ERROR,
++                          "SEC2_DEBUG: GEN3_P1 MAX_RATE=3+DIS_G3: LINK_CFG0=0x%08x CAP2=0x%08x "
++                          "(CAP2 0x0E=Gen1-3 advertised / 0x06=still Gen1-2)\n",
++                          GPU_REG_RD32(pGpu, 0x0008C040U),
++                          GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                /* self-heal: fully restore original CYA0 + LINK_CFG0; Gen2 path below undisturbed */
++                GPU_REG_WR32(pGpu, 0x0008C040U, g3lc0);
++                GPU_REG_WR32(pGpu, 0x0008C2C0U, g3cya0);
++            }
++            /* ===== END GEN3 PROBE ===== */
 +
 +            {
 +                NvU32 lc2 = GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CTRL_2_ADDR);
