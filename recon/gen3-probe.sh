@@ -28,6 +28,12 @@
 ###############################################################################
 set -uo pipefail   # deliberately NOT -e: we trap failures so recovery always runs
 
+# --dry-run / -n : read-only pre-flight (dump regs + fuses + caps), NO writes/retrain.
+# Safe to run against a working link (e.g. your live Gen2) — this is Exp 0/Exp 1 recon.
+DRY_RUN=0
+for a in "$@"; do case "$a" in --dry-run|-n) DRY_RUN=1 ;; esac; done
+export GEN3_DRY_RUN="$DRY_RUN"
+
 # Refuse to run if it looks like the current-speed is already >=3, or no card.
 if command -v nvidia-smi >/dev/null 2>&1; then
   cur="$(nvidia-smi --query-gpu=pcie.link.gen.current --format=csv,noheader 2>/dev/null | head -1 | tr -d '[:space:]' || true)"
@@ -204,6 +210,11 @@ for dev,tag in ((gpu,"GPU"),(up,"UP ")):
           f"LnkSta=0x{pci_read(dev,cap+0x10,4):08x} "
           f"LnkCtl2=0x{pci_read(dev,cap+0x30,4):08x}")
 print(f"  pre-flight negotiated speed = Gen{cur_speed(gpu)}")
+
+if os.environ.get("GEN3_DRY_RUN") == "1":
+    print("gen3-probe: --dry-run set -> read-only pre-flight complete; NO writes/retrain performed.")
+    m.close(); os.close(fd)
+    raise SystemExit(0)
 
 # ============================== WRITE SEQUENCE ==============================
 # (1) keep Gen2 enabled (clear DIS_G2) — Gen1+Gen2+Gen3 all in the set
