@@ -86,7 +86,7 @@ gist alone**; verify physical capacity first.
 |---|---|---|---|
 | `SM_SPEED_SELECT_FFMA` (+8 more) | `0x5` (max throttle) | FP32-FMA 16:1, DP4A 16–20×, Tensor gating | **software only** (`-fmad=false`, cmppatcher) — this is what cmpunlocker's SS0/SS1 do |
 | `FUSE_NVLINK_DIS` | `0x7` (all groups) | NVLink off | CTRL_OPT override (under investigation) |
-| `FUSE_PCIE_GEN23_DIS` = **`OPT_GEN23` @ `0x82057c`** | `0x1` | Gen2/3 fused off | **on-hardware write `0x1→0x0` FAILED ([doc 09](09-onhw-pcie-gen-beta-result.md))** — immutable; "double-locked", retimer likely futile |
+| `FUSE_PCIE_GEN23_DIS` = **`OPT_GEN23` @ `0x82057c`** | `0x1` | Gen2/3 fused off | on-hardware write `0x1→0x0` failed ([doc 09](09-onhw-pcie-gen-beta-result.md)) — **but the override-enable (`EN_SW_OVERRIDE`) was never set first, so "immutable" is untested** |
 | `FUSE_EN_SW_OVERRIDE` | `0x0` | CTRL_OPT fuse override disabled | **"cannot change — inert on 170HX"** |
 
 Reconciliation with **approach #1** (doc 07): the CTRL_OPT override mechanism the gist names is exactly

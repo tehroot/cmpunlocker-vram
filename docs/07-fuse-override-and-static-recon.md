@@ -71,6 +71,8 @@ bitmask}`**; the firmware walks them — *read `register`, test `bitmask`, branc
   are not in the ROM at all — the VBIOS is byte-identical 170HX↔A100 (doc 03), so the crippling is in
   silicon. Distinguishing the gen bit needs the live 170HX-vs-A100 fuse diff. (This is why doc 05 left
   `FUSE_PCIE_GEN23_DIS`'s address unspecified — it is genuinely not statically determinable.)
+  **Since resolved on-hardware:** the beta Gen2 log pins the gen-fuse OPT register at **`OPT_GEN23 =
+  0x82057c`** (reads `0x1` = Gen2/3 disabled) — see [doc 09](09-onhw-pcie-gen-beta-result.md).
 - **Corroboration for Q3 (unfavorable).** app `0x08`'s code references the PHY block (incl. `0x14118f78`)
   and `LnkCtl/LnkSta` (`0x14088088`) but **not** `LnkCap2` (`0x140880a4`). Matching doc 03: the gen cap is
   hardware-latched at reset and consumed outside firmware — i.e. pointing to raw-fuse-direct consumption.
@@ -93,13 +95,25 @@ Secure Boot / lockdown off, `fusedump` built, **both a 170HX and a reference A10
      (tests Q3/Q4 in one shot).
    - **Rejected** → it is fuse-side; #1 is dead. Fall back to doc 06 avenues #2 / #4 / #6.
 
-## Honest verdict
-~10–20% survives Q1+Q2, materially less once Q3 is in play — the static evidence (gen hardware-latched,
-read via the RO feature-readout path, `LnkCap2` never firmware-touched) leans dead. But the recon is
-near-free, and a positive Q1 would reopen the entire PCIe-gen question — so characterising #1 is the first
-thing to do on the card, right after the doc 05 Test 0/Test 1 reads.
+## Status: Q1 is UNTESTED — the gate has never actually been opened
+> **Correction (supersedes an earlier "leans dead" verdict).** The on-hardware evidence to date does
+> **not** resolve Q1, because the test has never been run correctly:
+> - The beta Gen2 branch ([doc 09](09-onhw-pcie-gen-beta-result.md)) wrote the gen fuse `OPT_GEN23` — now
+>   pinned on-hardware at **`0x82057c`** — directly to `0`, and it stayed `1` ("FAILED to set OPT_GEN23").
+>   **But that branch never wrote `EN_SW_OVERRIDE` (`0x820040`) first.** So the failure is the *expected*
+>   behaviour of a gated OPT write with the gate still shut — **not** evidence that the gate is fuse-side.
+> - The gist's "`EN_SW_OVERRIDE` is inert / cannot change" ([doc 08](08-vbios-mac-fuse-map-external.md)) is
+>   an unverified secondhand claim with unknown methodology (did they open the fuse-block PLM? use an HS
+>   write?). It is not evidence Q1 is closed.
+>
+> The two gates in step 4 above are **different**: the **PLM** (priv-level *access* — which the beta opened)
+> and **`EN_SW_OVERRIDE`** (whether an OPT write actually *takes*). Opening the first without the second is
+> why every direct `OPT_GEN23` write has failed. The corrected **`driver/patches/experimental/`-style Gen2
+> `0007-pcie-gen2.patch`** (modified to write `EN_SW_OVERRIDE = 1` *before* `OPT_GEN23`, readback-gated so
+> it skips the retrain unless the fuse flips) is exactly this Q1 test — built and ready to boot.
 
-**External update ([doc 08](08-vbios-mac-fuse-map-external.md)):** the JRex286 VBIOS analysis reports
-`EN_SW_OVERRIDE` is **"inert / cannot change"** and the CTRL_OPT fuse-override table reads **all-zeros on
-13 GA100 cards** — i.e. Q1 resolves *fuse-side* on their evidence, dropping #1's odds further. Keep the
-live Q1 write-test as confirmation, not a hopeful bet.
+**Odds, honestly:** if `EN_SW_OVERRIDE` is a PLM-gated register, Q1 passes and the entire PCIe-gen question
+reopens; if it is itself fuse-backed, Q1 fails and #1 is dead. Even a Q1 pass leaves Q3 (does the consumer
+read the overridable shadow or the raw fuse directly), where the static evidence leans unfavourable. Net: a
+real but lower-probability shot — worth running because the test is **one boot away** and a positive Q1
+would be the single biggest result of the investigation. Run it right after the doc 05 Test 0/Test 1 reads.

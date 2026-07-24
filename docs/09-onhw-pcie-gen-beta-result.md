@@ -3,8 +3,9 @@
 > Analysis of a real boot log (`message.txt`) from a **beta cmpunlocker branch** that extends the unlock
 > to PCIe gen, on **2× CMP 170HX** (`10de:20c2`) on a HiveOS / dual-EPYC rig, patched nvidia-open
 > 610.43.03. This is the first **on-hardware** test of the PCIe-gen path, and it confirms the fuse model
-> (docs 02 / 07 / 08) at register level. **Bottom line: software PCIe-gen unlock is dead — the fuse is
-> real, immutable, and clamps the LTSSM independently of everything else.**
+> (docs 02 / 07 / 08) at register level. **Bottom line (corrected): the config-space spoof is cosmetic and
+> the link stays Gen1 — but the branch's `OPT_GEN23` write failed because it never enabled the OPT override
+> (`EN_SW_OVERRIDE`) first, so the fuse is NOT proven immutable; the override-enable chain is untested.**
 
 ## What the beta attempts
 Beyond a config-space cap spoof it opens extra PLMs (XVE `0x88xxx`, XP3G `0x8e1b0`, OPT `0x8200fc`, FEAT2
@@ -24,13 +25,19 @@ Every *advertised* layer now says Gen2; `speed=1` before and after, and `STAT=0x
 CurrentLinkSpeed=Gen1, width=x4. **The link never leaves Gen1 x4.** This is the developer's "advertising
 5 GT/s, training 2.5" — measured, and exactly the advertised-≠-negotiated model.
 
-## The decisive finding: the gen fuse is immutable
+## The key finding: the gen fuse (`OPT_GEN23 @ 0x82057c`) — write rejected, but the gate was never opened
 `OPT_GEN23` @ **`0x82057c`** reads `0x00000001` (Gen2/3 disabled). Two writes to `0x0` → readback stays
-`0x1`; the log prints **`FAILED to set OPT_GEN23`**. Under the *same* Booter status (`0xffff`) that
-successfully lands SS0/SS1/CFG1/LMR, the PLM opens (`→0xffffffff`), and the XP3G override values, **this
-one register rejects the write** — so it is genuinely immutable to the HS-Booter primitive, not a Booter
-artifact. This is the register-level confirmation of `FUSE_PCIE_GEN23_DIS=1` (doc 08), the empirical close
-of approach #1 (doc 07) for gen, and it **pins the exact address the gist left unspecified**.
+`0x1`; the log prints **`FAILED to set OPT_GEN23`**. This **pins the exact address the gist left
+unspecified** and confirms the *value* `FUSE_PCIE_GEN23_DIS=1` (doc 08).
+
+**Correction to an earlier overstatement:** `OPT_GEN23` is a software *shadow* of the raw fuse, and its
+write was rejected because the beta branch **never wrote `EN_SW_OVERRIDE` (`0x820040`)** — the OPT-override
+enable is `0`, so OPT writes are silently discarded and the readback returns the fused value. That is the
+*expected* behaviour of a gated OPT write, **not** proof the fuse is physically immutable. The branch opens
+the PLM (priv-level *access*) but not the override *enable* — two different gates. So approach #1 (doc 07)
+is **untested, not closed**: the real questions — can `EN_SW_OVERRIDE` be flipped, and if so does the LTSSM
+read the shadow (Q1/Q3) — were never exercised. The modified `0007-pcie-gen2.patch` on the Gen2 branch adds
+the `EN_SW_OVERRIDE`-first sequence (readback-gated) to settle it.
 
 ## The PHY override took — and still didn't help (the double-lock, observed)
 XP3G block: `PLM 0x8e1b0`, `OVR0 0x8e110`, `VAL0 0x8e120`, `OVR3 0x8e11c`, `VAL3 0x8e12c`. The beta wrote
@@ -61,8 +68,10 @@ flag applies to exactly this config; unrelated to the PCIe result but the card t
 ## What this settles
 - **Resolves doc 02's "Gen2 reconciliation":** the card *advertises* Gen2 (spoofable config space) and
   *trains* Gen1 (fuse-clamped LTSSM). Both prior observations were correct — different layers.
-- **Confirms docs 02 / 05 / 07 / 08:** PCIe gen is a genuine, immutable-fuse dead-end for software, now
-  with the exact register (`OPT_GEN23 0x82057c`) and a failed on-hardware write.
+- **Refines docs 02 / 05 / 07 / 08:** it pins the gen fuse register (`OPT_GEN23 0x82057c`) and its value
+  (`=1`), but does **not** prove a software dead-end — the OPT-override enable (`EN_SW_OVERRIDE`) was never
+  set, so whether the shadow is overridable is still open (doc 07 Q1/Q3). Follow-up: the modified Gen2
+  `0007` patch.
 - **Reframes the retimer (doc 06 #4):** the block is at the **LTSSM/fuse**, not the advertisement — so a
   retimer that rewrites Rate IDs in TS ordered sets likely cannot help either, because the GPU-facing
   segment's LTSSM still refuses to train Gen2. The retimer's odds drop accordingly.
