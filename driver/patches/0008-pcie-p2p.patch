@@ -1,0 +1,46 @@
+--- a/src/nvidia/src/kernel/platform/p2p/p2p_caps.c
++++ b/src/nvidia/src/kernel/platform/p2p/p2p_caps.c
+@@ -616,6 +616,23 @@
+         }
+     }
+ 
++    /* cmpunlocker: force PCIe P2P caps OK for CMP 170HX (0x20C2/0x2082) —
++       overrides host chipset check + GSP-reported pcieP2PCaps + KBIF props. */
++    {
++        NvU32 __cmpInst = 0;
++        OBJGPU *__cmpGpu = gpumgrGetNextGpu(gpuMask, &__cmpInst);
++        if (__cmpGpu != NULL)
++        {
++            NvU32 __cmpDid = __cmpGpu->idInfo.PCIDeviceID >> 16;
++            if (__cmpDid == 0x20C2 || __cmpDid == 0x2082)
++            {
++                *pP2PReadCapStatus  = NV0000_P2P_CAPS_STATUS_OK;
++                *pP2PWriteCapStatus = NV0000_P2P_CAPS_STATUS_OK;
++                status = NV_OK;
++            }
++        }
++    }
++
+     if (pbCommonPciSwitch != NULL)
+     {
+         *pbCommonPciSwitch = bCommonPciSwitchFound;
+--- a/src/nvidia/src/kernel/gpu/gpu.c
++++ b/src/nvidia/src/kernel/gpu/gpu.c
+@@ -2517,6 +2517,17 @@
+ 
+     pGpu->pcieP2PReadCaps = p2pCapsParams.p2pReadCapsStatus;
+     pGpu->pcieP2PWriteCaps = p2pCapsParams.p2pWriteCapsStatus;
++
++    /* cmpunlocker: force PCIe P2P caps OK for CMP 170HX (0x20C2/0x2082) —
++       overrides GSP-reported per-GPU pcieP2PReadCaps/WriteCaps. */
++    {
++        NvU32 __cmpDid = pGpu->idInfo.PCIDeviceID >> 16;
++        if (__cmpDid == 0x20C2 || __cmpDid == 0x2082)
++        {
++            pGpu->pcieP2PReadCaps  = NV0000_P2P_CAPS_STATUS_OK;
++            pGpu->pcieP2PWriteCaps = NV0000_P2P_CAPS_STATUS_OK;
++        }
++    }
+ }
+ 
+ static void
