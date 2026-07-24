@@ -87,6 +87,101 @@ Booter status codes such as `0x31` / `0xffff` during the early PLM Booter passes
 
 ---
 
+## Troubleshooting
+
+### `/proc/driver/nvidia/version` still says `dvs-builder`
+
+`dvs-builder` is NVIDIA's internal build host, baked into their **precompiled** module. Seeing it means the
+running driver is the stock one — the patched modules in `/lib/modules/$(uname -r)/updates/cmpunlocker/`
+were built and installed, but are not what got loaded.
+
+**Confirm it properly first.** The build-host string is a hint; `srcversion` is exact:
+
+```bash
+cat /sys/module/nvidia/srcversion
+modinfo -F srcversion /lib/modules/$(uname -r)/updates/cmpunlocker/nvidia.ko
+# differ  -> the running module is not the patched one
+```
+
+```bash
+sudo dmesg | grep SEC2_DEBUG    # silence = patched module never loaded
+```
+
+Then work down this list — roughly in the order these actually happen:
+
+**1. The old module never unloaded.** Most common. The installer says
+`Could not unload nvidia modules (in use) — cold reboot required`. Anything holding the GPU blocks it:
+`nvidia-persistenced`, `nvidia-fabricmanager`, an X/Wayland session, or a container.
+
+```bash
+sudo lsof /dev/nvidia* 2>/dev/null; lsmod | grep nvidia
+sudo shutdown -h now      # full power off, then power on — not `reboot`
+```
+
+Use a **cold** cycle rather than a warm `reboot` — every install path in this repo prescribes a full power
+off, and warm reboots have proven unreliable at picking up the patched modules.
+
+**2. You are running a different kernel than the one you built for.** Everything is keyed to `uname -r` at
+build time. Boot another kernel (after a kernel update, say) and the patched modules are simply not in that
+kernel's tree, so stock loads.
+
+```bash
+ls /lib/modules/$(uname -r)/updates/cmpunlocker/
+# missing or empty -> rebuild under the running kernel:
+sudo ./install.sh
+```
+
+**3. Stock wins module resolution.** `updates/` normally outranks `kernel/`, but a DKMS copy or a
+`/etc/depmod.d/` override can change that.
+
+```bash
+modprobe -n -v nvidia     # must print the path under updates/cmpunlocker/
+sudo depmod -a
+ls /lib/modules/$(uname -r)/updates/dkms/nvidia.ko 2>/dev/null   # a competing copy
+grep -r . /etc/depmod.d/ 2>/dev/null                             # search-order overrides
+```
+
+The installer already warns about this: `Resolved nvidia.ko is not under updates/cmpunlocker/ — stock may
+still win`.
+
+**4. The initramfs still carries the stock module.** The installer rebuilds it, but only if
+`update-initramfs`, `dracut`, or `mkinitcpio` is present — otherwise it prints
+`No initramfs tool found — rebuild manually before rebooting` and continues anyway.
+
+```bash
+sudo update-initramfs -u -k "$(uname -r)"    # or: sudo dracut --force --kver "$(uname -r)"
+```
+
+**5. A package or DKMS rebuild landed after your install** and reclaimed the module. Re-run
+`sudo ./install.sh`; consider holding the nvidia packages if this recurs.
+
+**Still stuck?** Start clean, then reinstall:
+
+```bash
+sudo ./remove.sh --yes
+sudo shutdown -h now
+# power on, verify stock is healthy with nvidia-smi, then:
+sudo ./install.sh
+```
+
+### Memory still shows stock size
+
+If `SEC2_DEBUG` lines *are* present but `nvidia-smi` reports the stock size, the modules are correct and the
+unlock ran — cold power-cycle. If the geometry is wrong rather than stock (40 GB on an 8 GB card or vice
+versa), the profile was misdetected:
+
+```bash
+cat /lib/modules/$(uname -r)/updates/cmpunlocker/card_profile   # 8gb or 10gb
+sudo ./install.sh --profile=8gb    # or --profile=10gb
+```
+
+### Build fails on Debian/Ubuntu with conftest errors
+
+Split kernel headers make conftest blind. See [`docs/11-debian-build-notes.md`](docs/11-debian-build-notes.md),
+or use the one-shot [`debian13-setup.sh`](debian13-setup.sh).
+
+---
+
 ## What Gets Unlocked
 
 | Feature | Status |
