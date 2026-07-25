@@ -593,3 +593,43 @@ after flushing 32 reads through `PMC_BOOT_0` — and the verdict uses the second
 not change: forcing those registers, whether or not the writes landed, never
 moved `CAP` or `CAP2`. The "straps are not the enforcement point" conclusion
 rests on that, not on the `REVERTED` verdicts.
+
+## XP3G — the override file, and OPT_MAGIC
+
+A full (unfiltered) `--base-only` log surfaced a register file the greps had been
+hiding, and a window neither dump covers.
+
+```
+XP3G_STATUS  0x8e100 + 4i      st0=0x00000000  st3=0x16680000
+XP3G_OVR     0x8e110 + 4i      ovr0=0x00000001 ovr3=0x00000004
+XP3G_VAL     0x8e120 + 4i      val0=0x00000000 val3=0x00200000
+XP3G_PLM     0x8e1b0..0x8e1bc  0xffffffff -- already open, writes land
+```
+
+`XP3G_STATUS3` (`0x8e10c`) reads `0x16680000`, which is **exactly** the fuse at
+`0x820520` that `0007` calls `OPT_MAGIC`. The status word mirrors the fuse, and
+`OVR`/`VAL` are the mechanism for overriding it.
+
+And that fuse is one of the biggest differences between the parts:
+
+```
+0x820520  OPT_MAGIC   A100 = 0x00200000   170HX = 0x16680000
+                      XOR  = 0x16480000   bits 19, 22, 25, 26, 28
+```
+
+`0007` **already sets `VAL3 = 0x00200000`** — the A100 value. But `OVR3 =
+0x00000004`, so only bit 2 is overridden, and none of bits 19/22/25/26/28 are
+covered. Right register, right value, wrong mask.
+
+`XP3G_OVR` (`CmpXp3g` / `CmpXp3gSlot` / `CmpXp3gOvr` / `CmpXp3gVal`) writes
+`VAL` then `OVR` — that order, so there is no window where a live mask sits over
+stale data — re-reads `STATUS` after a flush, and reports `CAP`/`CAP2`. Defaults
+are slot 3, `OVR=0xffffffff`, `VAL=0x00200000`.
+
+**`0x8e000` is in neither capture**, so XP3G was never diffed against the
+reference. The window is now in `ga100-bar0-dump.c`'s `--wide` list for any
+future reference capture.
+
+Caveat worth stating up front: `STATUS` mirroring the fuse does not prove
+anything downstream consumes `STATUS` for the link-speed decision. If `STATUS`
+moves and `CAP2` does not, the override works and simply is not wired to gen.

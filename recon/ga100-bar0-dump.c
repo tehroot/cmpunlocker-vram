@@ -117,6 +117,7 @@ static const struct region wide[] = {
 	{ 0x0000000, 0x1000, "PMC" },
 	{ 0x0088000, 0x1000, "XVE full" },
 	{ 0x008c000, 0x1000, "XP full" },
+	{ 0x008e000, 0x1000, "XP3G override file" },
 	{ 0x0118000, 0x1000, "PGC6 / AON island" },
 	{ 0x0132000, 0x1000, "lane-map / packer full" },
 	{ 0x0137000, 0x1000, "per-lane full" },

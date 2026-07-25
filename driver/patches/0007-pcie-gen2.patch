@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,1682 @@
+@@ -4942,6 +4942,1771 @@
                        devId);
          }
  
@@ -1505,6 +1505,95 @@
 +                    }
 +                }
 +                /* ===== END XVE_PERMIT ===== */
++
++                /* ===== BEGIN XP3G_OVR =====
++                 * Override the fuse-derived XP3G status word.
++                 *
++                 * XP3G is a 4-slot override file:
++                 *   STATUS  0x8e100 + 4i   (fuse-driven)
++                 *   OVR     0x8e110 + 4i   (which bits software supplies)
++                 *   VAL     0x8e120 + 4i   (the bits it supplies)
++                 *   PLM     0x8e1b0..1bc   reads 0xffffffff -- already open
++                 *
++                 * On this card STATUS3 (0x8e10c) reads 0x16680000, which is
++                 * exactly the fuse at 0x820520 ("OPT_MAGIC"). So the status word
++                 * is a mirror of that fuse, and OVR/VAL exist to override it.
++                 *
++                 * The A100 reference reads 0x00200000 at 0x820520 (docs/19), so:
++                 *
++                 *   170HX 0x16680000
++                 *   A100  0x00200000
++                 *   XOR   0x16480000   bits 19, 22, 25, 26, 28
++                 *
++                 * 0007 already sets VAL3 = 0x00200000 -- the A100 value -- but
++                 * OVR3 = 0x00000004, so only bit 2 is overridden and none of the
++                 * bits that actually differ are covered. Right register, right
++                 * value, wrong mask.
++                 *
++                 * Defaults here override the full word. Writes to OVR/VAL are
++                 * observed to land (rd matches) with the PLM open.
++                 *
++                 *   CmpXp3g      1 = enable
++                 *   CmpXp3gSlot  slot index 0-3, default 3
++                 *   CmpXp3gOvr   OVR mask,  default 0xffffffff
++                 *   CmpXp3gVal   VAL value, default 0x00200000 (A100)
++                 */
++                {
++                    NvU32 xp3g = 0;
++                    NvU32 xpSlot = 3, xpOvr = 0xFFFFFFFFU, xpVal = 0x00200000U;
++
++                    (void)osReadRegistryDword(pGpu, "CmpXp3g",     &xp3g);
++                    (void)osReadRegistryDword(pGpu, "CmpXp3gSlot", &xpSlot);
++                    (void)osReadRegistryDword(pGpu, "CmpXp3gOvr",  &xpOvr);
++                    (void)osReadRegistryDword(pGpu, "CmpXp3gVal",  &xpVal);
++
++                    if (xp3g != 0)
++                    {
++                        NvU32 sAddr, oAddr, vAddr;
++                        NvU32 st0, st1, fl;
++
++                        if (xpSlot > 3U)
++                            xpSlot = 3U;
++
++                        sAddr = 0x0008e100U + (xpSlot * 4U);
++                        oAddr = 0x0008e110U + (xpSlot * 4U);
++                        vAddr = 0x0008e120U + (xpSlot * 4U);
++
++                        st0 = GPU_REG_RD32(pGpu, sAddr);
++
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: XP3G_OVR begin slot=%u ovr=0x%08x "
++                                  "val=0x%08x ST=0x%08x OPT_MAGIC=0x%08x "
++                                  "PLM=0x%08x CAP=0x%08x CAP2=0x%08x\n",
++                                  xpSlot, xpOvr, xpVal, st0,
++                                  GPU_REG_RD32(pGpu, 0x00820520U),
++                                  GPU_REG_RD32(pGpu, 0x0008e1b0U),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++
++                        /* VAL before OVR, so no window with a live mask over
++                         * stale data. */
++                        GPU_REG_WR32(pGpu, vAddr, xpVal);
++                        GPU_REG_WR32(pGpu, oAddr, xpOvr);
++
++                        for (fl = 0; fl < 32U; fl++)
++                            (void)GPU_REG_RD32(pGpu, 0x00000000U);
++
++                        st1 = GPU_REG_RD32(pGpu, sAddr);
++
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: XP3G_OVR after OVR=0x%08x VAL=0x%08x "
++                                  "ST=0x%08x->0x%08x %s CAP=0x%08x CAP2=0x%08x\n",
++                                  GPU_REG_RD32(pGpu, oAddr),
++                                  GPU_REG_RD32(pGpu, vAddr),
++                                  st0, st1,
++                                  (st1 != st0) ? "STATUS MOVED" : "status unchanged",
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                    }
++                }
++                /* ===== END XP3G_OVR ===== */
++
 +
 +
 +                lc2 = (lc2 & ~0x0000000FU) | tgt;
