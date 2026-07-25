@@ -304,7 +304,7 @@
          {
 --- a/src/nvidia/src/kernel/gpu/gsp/arch/turing/kernel_gsp_tu102.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/arch/turing/kernel_gsp_tu102.c
-@@ -611,6 +611,314 @@
+@@ -611,6 +611,322 @@
          }
      }
  
@@ -501,26 +501,34 @@
 +                                     * standing DIS_G3 candidate is bit4 -> CmpGen3Cya=0x10.
 +                                     */
 +                                    NvU32 cyaMask = 0, cya1Mask = 0, misc1Mask = 0;
++                                    NvU32 cyaSet = 0, cya1Set = 0, misc1Clr = 0;
 +
 +                                    (void)osReadRegistryDword(pGpu, "CmpGen3Cya", &cyaMask);
 +                                    (void)osReadRegistryDword(pGpu, "CmpGen3Cya1", &cya1Mask);
 +                                    (void)osReadRegistryDword(pGpu, "CmpGen3Misc1", &misc1Mask);
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3CyaSet", &cyaSet);
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3Cya1Set", &cya1Set);
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3Misc1Clr", &misc1Clr);
 +
-+                                    if (cyaMask != 0)
-+                                        GPU_REG_WR32(pGpu, 0x0008c2c0U, sCya0 & ~cyaMask);
-+                                    if (cya1Mask != 0)
-+                                        GPU_REG_WR32(pGpu, 0x0008c300U, sCya1 & ~cya1Mask);
-+                                    if (misc1Mask != 0)
-+                                        GPU_REG_WR32(pGpu, 0x0008841cU, sMisc1 | misc1Mask);
++                                    if ((cyaMask | cyaSet) != 0)
++                                        GPU_REG_WR32(pGpu, 0x0008c2c0U,
++                                                     (sCya0 & ~cyaMask) | cyaSet);
++                                    if ((cya1Mask | cya1Set) != 0)
++                                        GPU_REG_WR32(pGpu, 0x0008c300U,
++                                                     (sCya1 & ~cya1Mask) | cya1Set);
++                                    if ((misc1Mask | misc1Clr) != 0)
++                                        GPU_REG_WR32(pGpu, 0x0008841cU,
++                                                     (sMisc1 & ~misc1Clr) | misc1Mask);
 +
-+                                    if ((cyaMask | cya1Mask | misc1Mask) != 0)
++                                    if ((cyaMask | cya1Mask | misc1Mask |
++                                         cyaSet | cya1Set | misc1Clr) != 0)
 +                                        NV_PRINTF(LEVEL_ERROR,
-+                                                  "SEC2_DEBUG: GEN3_TRY bisect CYA0 0x%08x->0x%08x (clr 0x%08x) "
-+                                                  "CYA1 0x%08x->0x%08x (clr 0x%08x) "
-+                                                  "MISC1 0x%08x->0x%08x (set 0x%08x)\n",
-+                                                  sCya0, GPU_REG_RD32(pGpu, 0x0008c2c0U), cyaMask,
-+                                                  sCya1, GPU_REG_RD32(pGpu, 0x0008c300U), cya1Mask,
-+                                                  sMisc1, GPU_REG_RD32(pGpu, 0x0008841cU), misc1Mask);
++                                                  "SEC2_DEBUG: GEN3_TRY bisect CYA0 0x%08x->0x%08x (clr 0x%08x set 0x%08x) "
++                                                  "CYA1 0x%08x->0x%08x (clr 0x%08x set 0x%08x) "
++                                                  "MISC1 0x%08x->0x%08x (set 0x%08x clr 0x%08x)\n",
++                                                  sCya0, GPU_REG_RD32(pGpu, 0x0008c2c0U), cyaMask, cyaSet,
++                                                  sCya1, GPU_REG_RD32(pGpu, 0x0008c300U), cya1Mask, cya1Set,
++                                                  sMisc1, GPU_REG_RD32(pGpu, 0x0008841cU), misc1Mask, misc1Clr);
 +
 +                                    GPU_REG_WR32(pGpu, 0x0008c040U,
 +                                                 (sMaxRate & ~0x000C0000U) | (0x3U << 18));
@@ -577,11 +585,11 @@
 +                                        GPU_REG_WR32(pGpu, 0x0008c040U, sMaxRate);
 +                                        GPU_REG_WR32(pGpu, 0x0008c1c0U, sPlRate);
 +                                        GPU_REG_WR32(pGpu, 0x000880a8U, sGpuLc2);
-+                                        if (cyaMask != 0)
++                                        if ((cyaMask | cyaSet) != 0)
 +                                            GPU_REG_WR32(pGpu, 0x0008c2c0U, sCya0);
-+                                        if (cya1Mask != 0)
++                                        if ((cya1Mask | cya1Set) != 0)
 +                                            GPU_REG_WR32(pGpu, 0x0008c300U, sCya1);
-+                                        if (misc1Mask != 0)
++                                        if ((misc1Mask | misc1Clr) != 0)
 +                                            GPU_REG_WR32(pGpu, 0x0008841cU, sMisc1);
 +                                        osPciWriteWord(upH, capPtr + 0x30, sUpLc2);
 +                                        osPciWriteWord(upH, capPtr + 0x10,
