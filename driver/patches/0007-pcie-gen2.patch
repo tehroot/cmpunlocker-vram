@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,865 @@
+@@ -4942,6 +4942,929 @@
                        devId);
          }
  
@@ -625,6 +625,70 @@
 +                      GPU_REG_RD32(pGpu, 0x0013744cU),
 +                      GPU_REG_RD32(pGpu, 0x00137450U));
 +            /* ===== END PHY_GATE PROBE (read-only) ===== */
++
++            /*
++             * 0x118f78 field sweep.
++             *
++             * FWSEC_COMPARISON.md records devinit's RMW on this register using
++             * masks 0x3000 / 0x2000 / 0xc000 / 0x8000, "programs the PCIe link
++             * config per the fuse selector" -- i.e. two 2-bit fields, [13:12]
++             * and [15:14], both reading 0 on this card. 0x3000 was tried by
++             * hand and left CAP2 at 0x6.
++             *
++             * The publish trigger 0x8872c is host-writable, so each value can be
++             * written and re-published in the same boot instead of one reboot
++             * per value. Runs here, before GEN_EARLY, while the link is still at
++             * Gen1 and CAP2 is still 0x2.
++             *
++             * Plain GPU_REG_WR32 -- the earlier successful write to this
++             * register used the Booter, so the readback also tells us whether
++             * PL0 writes stick here.
++             *
++             * Restores 0x118f78 to its entry value at the end. CmpSweep=1.
++             */
++            {
++                NvU32 doSweep = 0;
++
++                (void)osReadRegistryDword(pGpu, "CmpSweep", &doSweep);
++                if (doSweep != 0)
++                {
++                    static const NvU32 sweepVals[] = {
++                        0x00001000U, 0x00002000U, 0x00003000U, 0x00004000U,
++                        0x00008000U, 0x0000c000U, 0x0000f000U,
++                        0x40000000U, 0x4000f000U, 0x0000ffffU
++                    };
++                    NvU32 si, saved = GPU_REG_RD32(pGpu, 0x00118f78U);
++
++                    NV_PRINTF(LEVEL_ERROR,
++                              "SEC2_DEBUG: SWEEP begin 0x118f78=0x%08x CAP=0x%08x CAP2=0x%08x\n",
++                              saved,
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++
++                    for (si = 0; si < (sizeof(sweepVals)/sizeof(sweepVals[0])); si++)
++                    {
++                        NvU32 rd, cap, cap2;
++
++                        GPU_REG_WR32(pGpu, 0x00118f78U, sweepVals[si]);
++                        rd = GPU_REG_RD32(pGpu, 0x00118f78U);
++                        GPU_REG_WR32(pGpu, 0x0008872cU, 0x00000006U);
++                        (void)GPU_REG_RD32(pGpu, 0x0008872cU);
++                        cap  = GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR);
++                        cap2 = GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR);
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: SWEEP want=0x%08x rd=0x%08x CAP=0x%08x CAP2=0x%08x%s\n",
++                                  sweepVals[si], rd, cap, cap2,
++                                  ((cap2 & 0x8U) != 0U) ? "   <<< GEN3 BIT SET" : "");
++                    }
++
++                    GPU_REG_WR32(pGpu, 0x00118f78U, saved);
++                    NV_PRINTF(LEVEL_ERROR,
++                              "SEC2_DEBUG: SWEEP end 0x118f78=0x%08x CAP2=0x%08x\n",
++                              GPU_REG_RD32(pGpu, 0x00118f78U),
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                }
++            }
++            /* ===== END SWEEP ===== */
 +
 +            /*
 +             * Feature-override shadow block dump (read-only).
