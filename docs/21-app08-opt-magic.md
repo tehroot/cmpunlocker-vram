@@ -89,3 +89,53 @@ CmpFeatAddr=0x820520  CmpFeatVal=0x00200000
 One Booter load. If `OPT_MAGIC` takes the A100 value and `CAP2` follows, that is
 the answer. If it takes and `CAP2` does not move, `OPT_MAGIC` is not the gate
 either and the fuse signature lives somewhere it has not been found.
+
+## Result — refused, and the asymmetry is the finding
+
+```
+FEAT_WR begin addr=0x820520 val=0x00200000 cur=0x16680000
+FEAT_WR 0x820520=0x00200000 attempt=0 status=0xffff rd=0x16680000
+FEAT_WR 0x820520=0x00200000 attempt=1 status=0xffff rd=0x16680000
+FEAT_WR FAILED
+```
+
+`OPT_MAGIC` refuses our write and `CAP2` stays `0x6`.
+
+**But `app08` writes this exact register** — `st b32 D[$r15] $r9` at `0xcdc9`,
+unconditionally, every boot. Our SEC2 Booter payload writes the same address and
+is refused.
+
+Both are privileged falcon-context writes. Only one lands. So **the OPT bank is
+not gated purely by privilege level** — it is gated by which master issues the
+write, or by a window that has closed by the time the Booter payload runs.
+
+That reframes every OPT refusal recorded in [doc 19](19-a100-reference-diff.md):
+
+- `EN_SW_OVERRIDE = 1` did not help because the override enable was never the
+  variable.
+- The fuse-block PLM being open (`0x8200fc = 0xffffffff`, set by `0001` on every
+  boot) did not help for the same reason.
+- `SENSE_CTRL` re-sensing did not help because the shadow was never refusing on
+  privilege grounds.
+
+The question was always "do we have enough privilege." The evidence now says
+privilege was never what was being checked.
+
+## What that implies
+
+Writing the OPT bank appears to require being the master that firmware uses at
+the time firmware uses it — i.e. running as devinit/`app08` during early init,
+not as a driver-triggered Booter payload afterwards.
+
+Two consequences:
+
+1. The HS ROP harness ([doc 20](20-hs-execution-surface.md)) does not obviously
+   help. It executes in the Booter's context, which is the context already being
+   refused. More capability in the wrong context is still the wrong context.
+2. The remaining route is modifying what `app08` itself does — a VBIOS change,
+   which runs into image signing. Not investigated, and a different class of
+   problem from everything attempted so far.
+
+Stated plainly: this closes the register-write approach rather than advancing it.
+The value is knowing *why* it was always going to fail, which was not established
+before.
