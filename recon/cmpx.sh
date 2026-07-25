@@ -32,6 +32,25 @@ for k in ${KEYS+"${KEYS[@]}"}; do DWORDS="$DWORDS;$k"; done
 
 echo "== NVreg_RegistryDwords=\"$DWORDS\""
 
+# Verify the running module actually contains the probe keys being requested.
+# A rebuild that silently did not take looks identical to a probe that ran and
+# found nothing -- that has burned this project three times.
+KO=$(find /lib/modules/"$(uname -r)" -name 'nvidia.ko*' 2>/dev/null | head -1)
+if [ -n "$KO" ]; then
+    MISSING=""
+    for k in ${KEYS+"${KEYS[@]}"}; do
+        name=${k%%=*}
+        case "$name" in Cmp*) ;; *) continue ;; esac
+        strings "$KO" 2>/dev/null | grep -qx "$name" || MISSING="$MISSING $name"
+    done
+    if [ -n "$MISSING" ]; then
+        echo "!! module lacks:$MISSING"
+        echo "!! $KO was not rebuilt with these probes."
+        echo "!! fix:  rm -rf driver/.build && sudo ./install.sh"
+        exit 1
+    fi
+fi
+
 # Clear the ring buffer so only this run's output is shown. Counting lines and
 # slicing was unreliable -- the buffer wraps under the volume these probes emit
 # and the offset silently goes wrong, producing "no matching lines" on a run
