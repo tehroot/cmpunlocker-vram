@@ -304,7 +304,7 @@
          {
 --- a/src/nvidia/src/kernel/gpu/gsp/arch/turing/kernel_gsp_tu102.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/arch/turing/kernel_gsp_tu102.c
-@@ -611,6 +611,268 @@
+@@ -611,6 +611,314 @@
          }
      }
  
@@ -482,9 +482,45 @@
 +                                    NvU32 sMaxRate = GPU_REG_RD32(pGpu, 0x0008c040U);
 +                                    NvU32 sPlRate  = GPU_REG_RD32(pGpu, 0x0008c1c0U);
 +                                    NvU32 sGpuLc2  = GPU_REG_RD32(pGpu, 0x000880a8U);
++                                    NvU32 sCya0    = GPU_REG_RD32(pGpu, 0x0008c2c0U);
++                                    NvU32 sCya1    = GPU_REG_RD32(pGpu, 0x0008c300U);
++                                    NvU32 sMisc1   = GPU_REG_RD32(pGpu, 0x0008841cU);
 +                                    NvU16 sUpLc2   = osPciReadWord(upH, capPtr + 0x30);
 +                                    NvU32 g3stat   = 0;
 +                                    NvU32 g3poll;
++
++                                    /*
++                                     * Bisect masks, all default 0 (no-op). Each is
++                                     * applied before the Gen3 staging writes and
++                                     * restored on failure with everything else:
++                                     *   CmpGen3Cya   bits to CLEAR in 0x8c2c0 (CYA_0)
++                                     *   CmpGen3Cya1  bits to CLEAR in 0x8c300 (CYA_1)
++                                     *   CmpGen3Misc1 bits to SET   in 0x8841c (PRIV_MISC_1)
++                                     * Stock CYA_0 is 0x068731b7: bit2 is DIS_G2 (already
++                                     * cleared for Gen2), bit3 is clear at reset, so the
++                                     * standing DIS_G3 candidate is bit4 -> CmpGen3Cya=0x10.
++                                     */
++                                    NvU32 cyaMask = 0, cya1Mask = 0, misc1Mask = 0;
++
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3Cya", &cyaMask);
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3Cya1", &cya1Mask);
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3Misc1", &misc1Mask);
++
++                                    if (cyaMask != 0)
++                                        GPU_REG_WR32(pGpu, 0x0008c2c0U, sCya0 & ~cyaMask);
++                                    if (cya1Mask != 0)
++                                        GPU_REG_WR32(pGpu, 0x0008c300U, sCya1 & ~cya1Mask);
++                                    if (misc1Mask != 0)
++                                        GPU_REG_WR32(pGpu, 0x0008841cU, sMisc1 | misc1Mask);
++
++                                    if ((cyaMask | cya1Mask | misc1Mask) != 0)
++                                        NV_PRINTF(LEVEL_ERROR,
++                                                  "SEC2_DEBUG: GEN3_TRY bisect CYA0 0x%08x->0x%08x (clr 0x%08x) "
++                                                  "CYA1 0x%08x->0x%08x (clr 0x%08x) "
++                                                  "MISC1 0x%08x->0x%08x (set 0x%08x)\n",
++                                                  sCya0, GPU_REG_RD32(pGpu, 0x0008c2c0U), cyaMask,
++                                                  sCya1, GPU_REG_RD32(pGpu, 0x0008c300U), cya1Mask,
++                                                  sMisc1, GPU_REG_RD32(pGpu, 0x0008841cU), misc1Mask);
 +
 +                                    GPU_REG_WR32(pGpu, 0x0008c040U,
 +                                                 (sMaxRate & ~0x000C0000U) | (0x3U << 18));
@@ -518,8 +554,12 @@
 +                                    /*
 +                                     * LnkSta2 is the EQ oracle doc 13 wanted and
 +                                     * could not reach: GPU side is 0x880a8[31:16],
-+                                     * upstream side is cap+0x32. Bits [0]=EqComplete,
-+                                     * [1]=Phase1, [2]=Phase2, [3]=Phase3.
++                                     * upstream side is cap+0x32. Bit [0] is Current
++                                     * De-emphasis Level, NOT an EQ bit -- the EQ bits
++                                     * are [1] Complete, [2] Phase1, [3] Phase2,
++                                     * [4] Phase3, [5] Link Equalization Request.
++                                     * LnkSta2=0x0001 therefore means no EQ bit set at
++                                     * all, i.e. the LTSSM never attempted 8 GT/s.
 +                                     */
 +                                    NV_PRINTF(LEVEL_ERROR,
 +                                              "SEC2_DEBUG: GEN3_TRY result t=%u ms STAT=0x%08x speed=%u "
@@ -537,6 +577,12 @@
 +                                        GPU_REG_WR32(pGpu, 0x0008c040U, sMaxRate);
 +                                        GPU_REG_WR32(pGpu, 0x0008c1c0U, sPlRate);
 +                                        GPU_REG_WR32(pGpu, 0x000880a8U, sGpuLc2);
++                                        if (cyaMask != 0)
++                                            GPU_REG_WR32(pGpu, 0x0008c2c0U, sCya0);
++                                        if (cya1Mask != 0)
++                                            GPU_REG_WR32(pGpu, 0x0008c300U, sCya1);
++                                        if (misc1Mask != 0)
++                                            GPU_REG_WR32(pGpu, 0x0008841cU, sMisc1);
 +                                        osPciWriteWord(upH, capPtr + 0x30, sUpLc2);
 +                                        osPciWriteWord(upH, capPtr + 0x10,
 +                                            (NvU16)(osPciReadWord(upH, capPtr + 0x10) | 0x0020U));
