@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,556 @@
+@@ -4942,6 +4942,572 @@
                        devId);
          }
  
@@ -416,8 +416,22 @@
 +                NvU32 tgt   = PCIE_GEN2_LINK_SPEED;
 +                NvU32 rate  = 0x2U;
 +                NvU32 plVal = PCIE_GEN2_PL_LINK_RATE_VALUE;
++                /*
++                 * 0x8872c is the supported-speeds source, not an "LTSSM nudge"
++                 * as the beta patch named it. On a clean boot:
++                 *     0x8872c = 0x0 -> LnkCap2 = 0x2   (Gen1 only)
++                 *     0x8872c = 0x6 -> LnkCap2 = 0x6   (Gen1 + Gen2)
++                 * i.e. LnkCap2 = 0x2 | value. LnkCap2[7:1] is the PCIe
++                 * supported-speeds vector, bit1 = 2.5, bit2 = 5.0, bit3 = 8.0,
++                 * so 0xe should advertise Gen3. Every run in this project has
++                 * written the literal 6, inherited from the beta patch.
++                 * LnkCap2 itself is RO in NV_PCFG_XVE_REGISTER_WR_MAP, which is
++                 * consistent with it being published from here.
++                 */
++                NvU32 xveCmd = 0x00000006U;
 +
 +                (void)osReadRegistryDword(pGpu, "CmpGen3Early", &early);
++                (void)osReadRegistryDword(pGpu, "CmpXveCmd", &xveCmd);
 +                if (early != 0)
 +                {
 +                    tgt   = 0x3U;
@@ -494,9 +508,11 @@
 +                          GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
 +                          GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
 +
-+                GPU_REG_WR32(pGpu, 0x0008872cU, 0x00000006U);
++                GPU_REG_WR32(pGpu, 0x0008872cU, xveCmd);
 +                NV_PRINTF(LEVEL_ERROR,
-+                          "SEC2_DEBUG: GEN_EARLY after XVE  XVE=0x%08x CAP=0x%08x CAP2=0x%08x\n",
++                          "SEC2_DEBUG: GEN_EARLY after XVE  want=0x%08x XVE=0x%08x "
++                          "CAP=0x%08x CAP2=0x%08x\n",
++                          xveCmd,
 +                          GPU_REG_RD32(pGpu, 0x0008872cU),
 +                          GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
 +                          GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
