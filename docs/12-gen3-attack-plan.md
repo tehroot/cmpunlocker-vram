@@ -1,5 +1,12 @@
 # 12 — Gen3 attack plan (synthesis of the 5-agent theorycraft)
 
+> **[CORRECTED — see [doc 18](18-pri-mapping-and-the-advertise-path.md)]** Any claim below that
+> `0x14118f78` (or the `0x14xxxxxx` range generally) is a reset-latched strap beyond the 16 MB BAR0
+> aperture and out of software reach is **wrong**. Falcon addresses are PRI addresses:
+> `falcon = 0x14000000 | pri`. `0x14118f78` is PRI `0x118f78`, inside the aperture, and is both
+> readable and PL0-writable on-card.
+
+
 > **SUPERSEDED by [doc 13](13-gen3-synthesis.md).** Kept for the lever map, the SI reasoning, the
 > bandwidth table and the safety/recovery ladder — all still correct. **Stale:** the headline odds
 > (55–60% / 25%), the ~70% "EQ auto-converges" number, Exp 0 (answered: `OPT_GEN3=1`), and Exp 1's

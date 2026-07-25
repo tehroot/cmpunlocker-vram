@@ -1,5 +1,12 @@
 # 17 — `app08` PHY programming: 170HX vs A100, and a working Falcon CFG
 
+> **[CORRECTED — see [doc 18](18-pri-mapping-and-the-advertise-path.md)]** Any claim below that
+> `0x14118f78` (or the `0x14xxxxxx` range generally) is a reset-latched strap beyond the 16 MB BAR0
+> aperture and out of software reach is **wrong**. Falcon addresses are PRI addresses:
+> `falcon = 0x14000000 | pri`. `0x14118f78` is PRI `0x118f78`, inside the aperture, and is both
+> readable and PL0-writable on-card.
+
+
 > Static result, no hardware. Derived from `fwsec/app08_170hx_imem.bin`, an A100 `app08` extracted
 > here for the first time, and the two ROMs in `roms/`.
 >

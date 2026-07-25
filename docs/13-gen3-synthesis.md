@@ -1,5 +1,12 @@
 # 13 — Gen3 attack synthesis (7-agent forensic + theorycraft)
 
+> **[CORRECTED — see [doc 18](18-pri-mapping-and-the-advertise-path.md)]** Any claim below that
+> `0x14118f78` (or the `0x14xxxxxx` range generally) is a reset-latched strap beyond the 16 MB BAR0
+> aperture and out of software reach is **wrong**. Falcon addresses are PRI addresses:
+> `falcon = 0x14000000 | pri`. `0x14118f78` is PRI `0x118f78`, inside the aperture, and is both
+> readable and PL0-writable on-card.
+
+
 > Supersedes/corrects [doc 12](12-gen3-attack-plan.md). Built from the confirmed Gen2 mechanism on the
 > user's own hardware (R530 + OcuLink, `LnkSta 5GT/s`), both fuses read blown, and the live Gen3 wedge.
 > Stance: wall = not-yet-bypassed. `OPT_GEN23=1` was already bypassed for Gen2.

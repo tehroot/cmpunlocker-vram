@@ -1,5 +1,12 @@
 # 02 — PCIe generation lock: the investigation
 
+> **[CORRECTED — see [doc 18](18-pri-mapping-and-the-advertise-path.md)]** Any claim below that
+> `0x14118f78` (or the `0x14xxxxxx` range generally) is a reset-latched strap beyond the 16 MB BAR0
+> aperture and out of software reach is **wrong**. Falcon addresses are PRI addresses:
+> `falcon = 0x14000000 | pri`. `0x14118f78` is PRI `0x118f78`, inside the aperture, and is both
+> readable and PL0-writable on-card.
+
+
 The central question of the session: **is the CMP 170HX's PCIe Gen1 limit a hard OTP fuse
 (unbeatable in software) or a re-writable register the cmpunlocker Booter primitive could target?**
 This document records the full arc, including two intermediate errors and how they were corrected.
