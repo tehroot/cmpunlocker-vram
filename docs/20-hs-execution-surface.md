@@ -135,3 +135,50 @@ fuse shadow. `cur=0xbadf1100` also confirms the host cannot read the alias, whic
 was expected and is why the Ampere-base dump was the verification.
 
 Closed. The remaining work is the chain itself.
+
+## Why dmem.bin never ran — and the fix
+
+Control run: the file loaded (`loaded 63488 bytes from
+/lib/firmware/nvidia/ga100/gsp/dmem.bin`) on a clean cold boot, generated with
+`--addr 0x820040 --value 1`. Afterwards `0x820040` read `0x00000000`. The chain
+did not fire.
+
+The generator was not at fault. The harness was never connected:
+
+- `dmem.bin` is read exactly once, in `_kgspCreateSignatureMemdesc()`.
+- The PLM-opening loop in `0001` runs on **every** boot when
+  `_kgspSec2PostblTimingEnabled()`, and calls
+  `kgspSec2PostblTimingRefillPayload()` **nine times**.
+- `refill()` calls `_kgspSec2PostblTimingFillPayload()`, which regenerates the
+  **built-in** payload.
+
+So the file's contents are overwritten nine times before any probe runs, and
+every `Cmp*` path has the same problem — all 7 refill call sites discard it.
+`dmem.bin` was effectively dead code: a load path with nothing downstream of it.
+
+`RAW_BOOTER` (`CmpRawBooter=N`) supplies the missing piece. It re-reads the file
+into the signature buffer and calls `kgspExecuteBooterLoad_HAL()` **without**
+refill, so the bytes that execute are exactly the bytes on disk. It runs after
+the PLM loop, restores WPR2 (`0x1fa824/28`) before each load as the working
+sequence does, and echoes `0xf754` / `0xf76c` back from the mapped buffer so the
+log proves which payload actually ran.
+
+### Incidental corroboration
+
+`0001`'s PLM table already opens `0x008200fc` ("OPT_PLM") to `0xffffffff`. The
+fuse-block PLM is therefore open during every experiment in
+[doc 19](19-a100-reference-diff.md), and `OPT_*` writes still refused. That is
+independent support for "PLM is not what blocks the OPT bank", arrived at from
+the driver source rather than from the `FEAT_PLM` readback whose scope was
+uncertain.
+
+### First use
+
+The control is the same one that just failed, run properly:
+
+```
+CmpRawBooter=1, dmem.bin generated with --addr 0x820040 --value 1
+```
+
+`0x820040` going `0 -> 1` proves a file-supplied chain executes. Only after that
+does varying the chain mean anything.

@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,1427 @@
+@@ -4942,6 +4942,1567 @@
                        devId);
          }
  
@@ -793,6 +793,146 @@
 +                }
 +            }
 +            /* ===== END DIFF ===== */
++
++            /* ===== BEGIN RAW_BOOTER =====
++             * Execute a Booter load using the dmem.bin payload verbatim.
++             *
++             * Why this is needed: dmem.bin is loaded once, in
++             * _kgspCreateSignatureMemdesc(). But the PLM-opening loop in
++             * 0001 runs on every boot and calls
++             * kgspSec2PostblTimingRefillPayload() nine times, and refill calls
++             * _kgspSec2PostblTimingFillPayload() -- which regenerates the
++             * BUILT-IN payload. So by the time any probe runs, the file's
++             * contents are long gone. Every Cmp* path has the same problem:
++             * all 7 refill call sites discard the file.
++             *
++             * That made dmem.bin unusable for chain work despite the load path
++             * existing. This block re-reads the file into the signature buffer
++             * and executes the Booter load WITHOUT refill, so the bytes that
++             * run are exactly the bytes on disk.
++             *
++             * Generate payloads with recon/mkdmem.py (run --verify first; a
++             * generator that has drifted from 0001 makes every result here
++             * meaningless).
++             *
++             * The stock chain performs one PRI write, with writeValue at
++             * 0xf754 and writeAddr at 0xf76c. FILL_DWORD (0x4a7) is a code
++             * address, so unplaced slots are a sled rather than padding --
++             * see docs/20-hs-execution-surface.md.
++             *
++             *   CmpRawBooter  number of Booter loads to run (0 = off, max 8)
++             */
++            {
++                NvU32 rawBooter = 0;
++
++                (void)osReadRegistryDword(pGpu, "CmpRawBooter", &rawBooter);
++
++                if (rawBooter != 0 && pKernelGsp->pSignatureMemdesc != NULL)
++                {
++                    NvU32 wLo = GPU_REG_RD32(pGpu, 0x001fa824U);
++                    NvU32 wHi = GPU_REG_RD32(pGpu, 0x001fa828U);
++                    NvU64 sigSz = memdescGetSize(pKernelGsp->pSignatureMemdesc);
++                    NvU32 iter;
++
++                    if (rawBooter > 8U)
++                        rawBooter = 8U;
++
++                    NV_PRINTF(LEVEL_ERROR,
++                              "SEC2_DEBUG: RAW_BOOTER begin n=%u sigSize=%llu "
++                              "wpr2=0x%08x/0x%08x EN=0x%08x GEN23=0x%08x "
++                              "GEN3=0x%08x CAP2=0x%08x\n",
++                              rawBooter, (unsigned long long)sigSz, wLo, wHi,
++                              GPU_REG_RD32(pGpu, 0x00820040U),
++                              GPU_REG_RD32(pGpu, 0x0082057cU),
++                              GPU_REG_RD32(pGpu, 0x00820580U),
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++
++                    for (iter = 0; iter < rawBooter; iter++)
++                    {
++                        NvU8 *pVa;
++                        NV_STATUS fileStatus = NV_ERR_GENERIC;
++                        NV_STATUS bootStatus;
++                        NvU32 head = 0, tail = 0;
++
++                        pVa = memdescMapInternal(pGpu,
++                                  pKernelGsp->pSignatureMemdesc,
++                                  TRANSFER_FLAGS_NONE);
++                        if (pVa != NULL)
++                        {
++                            fileStatus = os_open_and_read_file(
++                                SEC2_POSTBL_TIMING_DMEM_PATH, pVa, sigSz);
++                            if (fileStatus == NV_OK)
++                            {
++                                /* witness the payload actually in the buffer */
++                                head = ((NvU32)pVa[0xf754]) |
++                                       ((NvU32)pVa[0xf755] << 8) |
++                                       ((NvU32)pVa[0xf756] << 16) |
++                                       ((NvU32)pVa[0xf757] << 24);
++                                tail = ((NvU32)pVa[0xf76c]) |
++                                       ((NvU32)pVa[0xf76d] << 8) |
++                                       ((NvU32)pVa[0xf76e] << 16) |
++                                       ((NvU32)pVa[0xf76f] << 24);
++                            }
++                            memdescUnmapInternal(pGpu,
++                                pKernelGsp->pSignatureMemdesc, 0);
++                            memdescFlushCpuCaches(pGpu,
++                                pKernelGsp->pSignatureMemdesc);
++                        }
++
++                        if (fileStatus != NV_OK)
++                        {
++                            NV_PRINTF(LEVEL_ERROR,
++                                      "SEC2_DEBUG: RAW_BOOTER no payload (0x%x) "
++                                      "-- put one at %s\n",
++                                      fileStatus, SEC2_POSTBL_TIMING_DMEM_PATH);
++                            break;
++                        }
++
++                        if (pKernelGsp->pWprMeta != NULL)
++                        {
++                            pKernelGsp->pWprMeta->sysmemAddrOfSignature =
++                                memdescGetPhysAddr(
++                                    pKernelGsp->pSignatureMemdesc, AT_GPU, 0);
++                            pKernelGsp->pWprMeta->sizeOfSignature = sigSz;
++                        }
++                        if (pKernelGsp->pWprMetaDescriptor != NULL)
++                            memdescFlushCpuCaches(pGpu,
++                                pKernelGsp->pWprMetaDescriptor);
++
++                        GPU_REG_WR32(pGpu, 0x001fa824U, wLo);
++                        GPU_REG_WR32(pGpu, 0x001fa828U, wHi);
++
++                        bootStatus = kgspExecuteBooterLoad_HAL(pGpu, pKernelGsp,
++                            memdescGetPhysAddr(pKernelGsp->pWprMetaDescriptor,
++                                               AT_GPU, 0));
++
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: RAW_BOOTER iter=%u status=0x%x "
++                                  "f754=0x%08x f76c=0x%08x EN=0x%08x "
++                                  "GEN23=0x%08x GEN3=0x%08x CAP=0x%08x "
++                                  "CAP2=0x%08x\n",
++                                  iter, bootStatus, head, tail,
++                                  GPU_REG_RD32(pGpu, 0x00820040U),
++                                  GPU_REG_RD32(pGpu, 0x0082057cU),
++                                  GPU_REG_RD32(pGpu, 0x00820580U),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                    }
++
++                    GPU_REG_WR32(pGpu, 0x001fa824U, wLo);
++                    GPU_REG_WR32(pGpu, 0x001fa828U, wHi);
++
++                    NV_PRINTF(LEVEL_ERROR,
++                              "SEC2_DEBUG: RAW_BOOTER end EN=0x%08x GEN23=0x%08x "
++                              "GEN3=0x%08x CAP=0x%08x CAP2=0x%08x\n",
++                              GPU_REG_RD32(pGpu, 0x00820040U),
++                              GPU_REG_RD32(pGpu, 0x0082057cU),
++                              GPU_REG_RD32(pGpu, 0x00820580U),
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                }
++            }
++            /* ===== END RAW_BOOTER ===== */
 +
 +            /* ===== BEGIN FUSE_MACRO =====
 +             * Drive the fuse macro register file directly.
