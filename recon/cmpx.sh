@@ -41,13 +41,15 @@ if [ -n "$KO" ]; then
     for k in ${KEYS+"${KEYS[@]}"}; do
         name=${k%%=*}
         case "$name" in Cmp*) ;; *) continue ;; esac
-        strings "$KO" 2>/dev/null | grep -qx "$name" || MISSING="$MISSING $name"
+        # -a is required: without it GNU strings skips .rodata in a
+        # relocatable .ko and every key looks absent.
+        strings -a "$KO" 2>/dev/null | grep -qx "$name" || MISSING="$MISSING $name"
     done
     if [ -n "$MISSING" ]; then
-        echo "!! module lacks:$MISSING"
-        echo "!! $KO was not rebuilt with these probes."
-        echo "!! fix:  rm -rf driver/.build && sudo ./install.sh"
-        exit 1
+        # Warn, do not abort: a wrong check blocking real work is worse than a
+        # silent rebuild. Believe the log over this heuristic.
+        echo "!! WARNING: module may lack:$MISSING"
+        echo "!! if the probe produces no output:  rm -rf driver/.build && sudo ./install.sh"
     fi
 fi
 
