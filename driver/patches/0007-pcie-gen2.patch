@@ -304,7 +304,7 @@
          {
 --- a/src/nvidia/src/kernel/gpu/gsp/arch/turing/kernel_gsp_tu102.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/arch/turing/kernel_gsp_tu102.c
-@@ -611,6 +611,158 @@
+@@ -611,6 +611,268 @@
          }
      }
  
@@ -453,6 +453,116 @@
 +                                      (stat >> 16) & 0xFU,
 +                                      GPU_REG_RD32(pGpu, 0x00088084U),
 +                                      GPU_REG_RD32(pGpu, 0x000880a4U));
++
++                            /*
++                             * ---- Gen3 ladder (opt-in) ----------------------
++                             * Runs only after Gen2 has actually trained. That
++                             * ordering is load-bearing: 0x8c1c0 and 0x880a8 are
++                             * rejected at Gen1 and only accept writes once the
++                             * link is at Gen2 (docs/16). So Gen3 is a second
++                             * step on top of Gen2, never a substitution.
++                             *
++                             * Enable per boot with the regkey:
++                             *   options nvidia NVreg_RegistryDwords="CmpTryGen3=1"
++                             *
++                             * Deltas vs the Gen2 state, all small: MAX_RATE
++                             * 2->3 (stock is already 3), PL_LINK_RATE
++                             * [21:20] 2->3, TargetLinkSpeed 3 on both ends.
++                             * On failure the Gen2 state is restored and the
++                             * link retrained back before boot continues.
++                             */
++                            {
++                                NvU32 tryGen3 = 0;
++
++                                if ((osReadRegistryDword(pGpu, "CmpTryGen3",
++                                                         &tryGen3) == NV_OK) &&
++                                    (tryGen3 != 0) &&
++                                    (((stat >> 16) & 0xFU) >= 2U))
++                                {
++                                    NvU32 sMaxRate = GPU_REG_RD32(pGpu, 0x0008c040U);
++                                    NvU32 sPlRate  = GPU_REG_RD32(pGpu, 0x0008c1c0U);
++                                    NvU32 sGpuLc2  = GPU_REG_RD32(pGpu, 0x000880a8U);
++                                    NvU16 sUpLc2   = osPciReadWord(upH, capPtr + 0x30);
++                                    NvU32 g3stat   = 0;
++                                    NvU32 g3poll;
++
++                                    GPU_REG_WR32(pGpu, 0x0008c040U,
++                                                 (sMaxRate & ~0x000C0000U) | (0x3U << 18));
++                                    GPU_REG_WR32(pGpu, 0x0008c1c0U, 0x00340036U);
++                                    GPU_REG_WR32(pGpu, 0x000880a8U,
++                                                 (sGpuLc2 & ~0x0000000FU) | 0x00000003U);
++                                    osPciWriteWord(upH, capPtr + 0x30,
++                                                   (NvU16)((sUpLc2 & ~0x000FU) | 0x0003U));
++
++                                    NV_PRINTF(LEVEL_ERROR,
++                                              "SEC2_DEBUG: GEN3_TRY staged CFG0=0x%08x PL=0x%08x "
++                                              "LC2=0x%08x upLC2=0x%04x CAP=0x%08x CAP2=0x%08x\n",
++                                              GPU_REG_RD32(pGpu, 0x0008c040U),
++                                              GPU_REG_RD32(pGpu, 0x0008c1c0U),
++                                              GPU_REG_RD32(pGpu, 0x000880a8U),
++                                              osPciReadWord(upH, capPtr + 0x30),
++                                              GPU_REG_RD32(pGpu, 0x00088084U),
++                                              GPU_REG_RD32(pGpu, 0x000880a4U));
++
++                                    osPciWriteWord(upH, capPtr + 0x10,
++                                        (NvU16)(osPciReadWord(upH, capPtr + 0x10) | 0x0020U));
++
++                                    for (g3poll = 0; g3poll < 20; g3poll++)
++                                    {
++                                        osDelay(10);
++                                        g3stat = GPU_REG_RD32(pGpu, 0x00088088U);
++                                        if (((g3stat >> 16) & 0xFU) >= 3U)
++                                            break;
++                                    }
++
++                                    /*
++                                     * LnkSta2 is the EQ oracle doc 13 wanted and
++                                     * could not reach: GPU side is 0x880a8[31:16],
++                                     * upstream side is cap+0x32. Bits [0]=EqComplete,
++                                     * [1]=Phase1, [2]=Phase2, [3]=Phase3.
++                                     */
++                                    NV_PRINTF(LEVEL_ERROR,
++                                              "SEC2_DEBUG: GEN3_TRY result t=%u ms STAT=0x%08x speed=%u "
++                                              "CAP=0x%08x CAP2=0x%08x LnkSta2=0x%04x upLnkSta2=0x%04x\n",
++                                              (g3poll + 1) * 10, g3stat,
++                                              (g3stat >> 16) & 0xFU,
++                                              GPU_REG_RD32(pGpu, 0x00088084U),
++                                              GPU_REG_RD32(pGpu, 0x000880a4U),
++                                              (NvU16)(GPU_REG_RD32(pGpu, 0x000880a8U) >> 16),
++                                              osPciReadWord(upH, capPtr + 0x32));
++
++                                    if (((g3stat >> 16) & 0xFU) < 3U)
++                                    {
++                                        /* self-heal: restore the Gen2 state and retrain back */
++                                        GPU_REG_WR32(pGpu, 0x0008c040U, sMaxRate);
++                                        GPU_REG_WR32(pGpu, 0x0008c1c0U, sPlRate);
++                                        GPU_REG_WR32(pGpu, 0x000880a8U, sGpuLc2);
++                                        osPciWriteWord(upH, capPtr + 0x30, sUpLc2);
++                                        osPciWriteWord(upH, capPtr + 0x10,
++                                            (NvU16)(osPciReadWord(upH, capPtr + 0x10) | 0x0020U));
++
++                                        for (g3poll = 0; g3poll < 20; g3poll++)
++                                        {
++                                            osDelay(10);
++                                            g3stat = GPU_REG_RD32(pGpu, 0x00088088U);
++                                            if (((g3stat >> 16) & 0xFU) >= 2U)
++                                                break;
++                                        }
++                                        NV_PRINTF(LEVEL_ERROR,
++                                                  "SEC2_DEBUG: GEN3_TRY reverted t=%u ms STAT=0x%08x "
++                                                  "speed=%u CAP2=0x%08x\n",
++                                                  (g3poll + 1) * 10, g3stat,
++                                                  (g3stat >> 16) & 0xFU,
++                                                  GPU_REG_RD32(pGpu, 0x000880a4U));
++                                    }
++                                }
++                                else
++                                {
++                                    NV_PRINTF(LEVEL_ERROR,
++                                              "SEC2_DEBUG: GEN3_TRY skipped (regkey CmpTryGen3=%u, speed=%u)\n",
++                                              tryGen3, (stat >> 16) & 0xFU);
++                                }
++                            }
 +                        }
 +                    }
 +                }
