@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,572 @@
+@@ -4942,6 +4942,647 @@
                        devId);
          }
  
@@ -339,6 +339,81 @@
 +                                  GPU_REG_RD32(pGpu, 0x00820580U),
 +                                  GPU_REG_RD32(pGpu, 0x0082057cU),
 +                                  GPU_REG_RD32(pGpu, 0x00820378U),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                    }
++                }
++
++                /*
++                 * PLM sweep for the 0x85xxx block.
++                 *
++                 * 0x85080 / 0x85084 are the allowed-mask RM re-derives the link
++                 * cap from, and they read 0xbadf1100 in every context tried --
++                 * driver GPU_REG_RD32 and the SEC2-postbl ROP. Unlike every
++                 * other block we touch, 0001's PLM table has no entry covering
++                 * 0x85xxx, so that gate has never actually been opened.
++                 *
++                 * Candidate addresses come from the naming convention visible
++                 * in the ZB fuse headers, NV_FUSE_ZB_OPT_*__PRIV_LEVEL_MASK
++                 * = 0x000000FC, i.e. PLM at block base + 0xFC. That is exactly
++                 * how OPT_PLM lands at 0x8200fc, which 0001 opens successfully
++                 * (reads 0xffffffff on-card). So 0x850fc is the first guess.
++                 *
++                 * CmpPlm = address to open, CmpPlmCnt = consecutive dwords
++                 * (default 1, capped at 4 -- each is a Booter load, and a run
++                 * with several failing loads pushed GSP bootstrap into a retry
++                 * loop). Logs 0x85080/0x85084 before and after so a lifted
++                 * poison is immediately visible.
++                 */
++                {
++                    NvU32 plmAddr = 0, plmCnt = 1, pi;
++
++                    (void)osReadRegistryDword(pGpu, "CmpPlm", &plmAddr);
++                    (void)osReadRegistryDword(pGpu, "CmpPlmCnt", &plmCnt);
++                    if (plmCnt == 0)
++                        plmCnt = 1;
++                    if (plmCnt > 4)
++                        plmCnt = 4;
++
++                    if (plmAddr != 0)
++                    {
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: PLM_SWEEP begin addr=0x%06x cnt=%u "
++                                  "s80=0x%08x s84=0x%08x\n",
++                                  plmAddr, plmCnt,
++                                  GPU_REG_RD32(pGpu, 0x00085080U),
++                                  GPU_REG_RD32(pGpu, 0x00085084U));
++
++                        for (pi = 0; pi < plmCnt; pi++)
++                        {
++                            NvU32 pAddr = plmAddr + (pi * 4U);
++                            NvU32 pRd;
++
++                            GPU_REG_WR32(pGpu, 0x001fa824U, wpr2Lo);
++                            GPU_REG_WR32(pGpu, 0x001fa828U, wpr2Hi);
++
++                            xpStatus = kgspSec2PostblTimingRefillPayload(pGpu, pKernelGsp,
++                                pAddr, 0xffffffffU);
++                            if (xpStatus != NV_OK)
++                                continue;
++
++                            xpStatus = kgspExecuteBooterLoad_HAL(pGpu, pKernelGsp,
++                                memdescGetPhysAddr(pKernelGsp->pWprMetaDescriptor, AT_GPU, 0));
++
++                            pRd = GPU_REG_RD32(pGpu, pAddr);
++                            NV_PRINTF(LEVEL_ERROR,
++                                      "SEC2_DEBUG: PLM_SWEEP 0x%06x status=0x%x rd=0x%08x "
++                                      "s80=0x%08x s84=0x%08x\n",
++                                      pAddr, xpStatus, pRd,
++                                      GPU_REG_RD32(pGpu, 0x00085080U),
++                                      GPU_REG_RD32(pGpu, 0x00085084U));
++                        }
++
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: PLM_SWEEP end s80=0x%08x s84=0x%08x "
++                                  "CAP=0x%08x CAP2=0x%08x\n",
++                                  GPU_REG_RD32(pGpu, 0x00085080U),
++                                  GPU_REG_RD32(pGpu, 0x00085084U),
 +                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
 +                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
 +                    }
