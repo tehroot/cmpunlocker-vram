@@ -11,7 +11,7 @@
  
  #include <sound/core.h>             /* HDA struct snd_card */
  
-@@ -1362,6 +1366,144 @@
+@@ -1362,6 +1366,169 @@
  #endif
  }
  
@@ -79,6 +79,31 @@
 +                  readl(bar0 + 0x88084), readl(bar0 + 0x880a4),
 +                  readl(bar0 + 0x880a8), readl(bar0 + 0x8c2c0),
 +                  readl(bar0 + 0x8c040));
++
++    /*
++     * Bisect the two writes 0007's boot block performs that this function
++     * historically did not. That block is where CAP2 is observed going
++     * 0x2 -> 0x6; DIS_G2 + MAX_RATE alone provably do not move it.
++     * Step A: PL_LINK_RATE. 0x8Cxxx is known writable here (CFG0 took).
++     * Step B: 0x880A8. 0x88xxx is PLM-locked post-boot; unknown at this
++     *         point in device init, so the readback is the measurement.
++     */
++    writel(0x00240036U, bar0 + 0x8c1c0);
++    (void)readl(bar0 + 0x8c1c0);
++    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
++                  "CMP Gen2: stepA PL=0x%08x CAP=0x%08x CAP2=0x%08x\n",
++                  readl(bar0 + 0x8c1c0), readl(bar0 + 0x88084),
++                  readl(bar0 + 0x880a4));
++
++    bar0_lc2 = readl(bar0 + 0x880a8);
++    writel(((bar0_lc2 & ~0x0000000fU) | 0x00000002U) | 0x000f0000U,
++           bar0 + 0x880a8);
++    (void)readl(bar0 + 0x880a8);
++    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
++                  "CMP Gen2: stepB LC2 want=0x%08x rb=0x%08x CAP=0x%08x CAP2=0x%08x\n",
++                  ((bar0_lc2 & ~0x0000000fU) | 0x00000002U) | 0x000f0000U,
++                  readl(bar0 + 0x880a8), readl(bar0 + 0x88084),
++                  readl(bar0 + 0x880a4));
 +    iounmap(bar0);
 +    msleep(50);
 +
@@ -156,7 +181,7 @@
  /*
   * Brings up the device on the first file open. Assumes nvl->ldata_lock is held.
   */
-@@ -1530,6 +1672,8 @@
+@@ -1530,6 +1697,8 @@
          nv->flags |= NV_FLAG_PERSISTENT_SW_STATE;
      }
  
