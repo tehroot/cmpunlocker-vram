@@ -304,7 +304,7 @@
          {
 --- a/src/nvidia/src/kernel/gpu/gsp/arch/turing/kernel_gsp_tu102.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/arch/turing/kernel_gsp_tu102.c
-@@ -611,6 +611,44 @@
+@@ -611,6 +611,57 @@
          }
      }
  
@@ -324,6 +324,14 @@
 +                      "SEC2_DEBUG: PCIe PRIV_MISC_1 late pre=0x%08x post=0x%08x\n",
 +                      misc1Late,
 +                      GPU_REG_RD32(pGpu, PCIE_GEN2_PRIV_MISC_1_ADDR_LATE));
++            NV_PRINTF(LEVEL_ERROR,
++                      "SEC2_DEBUG: GEN2_LATE entry CAP=0x%08x CAP2=0x%08x LC2=0x%08x "
++                      "CYA0=0x%08x CFG0=0x%08x\n",
++                      GPU_REG_RD32(pGpu, 0x00088084U),
++                      GPU_REG_RD32(pGpu, 0x000880a4U),
++                      GPU_REG_RD32(pGpu, 0x000880a8U),
++                      GPU_REG_RD32(pGpu, 0x0008c2c0U),
++                      GPU_REG_RD32(pGpu, 0x0008c040U));
 +            {
 +                NvU32 cyaLate = GPU_REG_RD32(pGpu, 0x0008c2c0U);
 +                cyaLate = cyaLate & ~(1U << 2);
@@ -342,6 +350,11 @@
 +                NV_PRINTF(LEVEL_ERROR,
 +                          "SEC2_DEBUG: PCIe XVE_OVR late=0x%08x\n",
 +                          GPU_REG_RD32(pGpu, 0x0008872cU));
++                NV_PRINTF(LEVEL_ERROR,
++                          "SEC2_DEBUG: GEN2_LATE exit  CAP=0x%08x CAP2=0x%08x LC2=0x%08x\n",
++                          GPU_REG_RD32(pGpu, 0x00088084U),
++                          GPU_REG_RD32(pGpu, 0x000880a4U),
++                          GPU_REG_RD32(pGpu, 0x000880a8U));
 +            }
 +        }
 +    }
