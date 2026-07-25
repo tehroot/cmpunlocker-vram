@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,460 @@
+@@ -4942,6 +4942,516 @@
                        devId);
          }
  
@@ -391,6 +391,34 @@
 +                          GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
 +                          GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR),
 +                          GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CTRL_2_ADDR));
++                {
++                    /*
++                     * XVE CYA cluster, BAR0 0x88700..0x88740 (cfg 0x700..0x740).
++                     * 17 contiguous dwords, all flagged writable by
++                     * NV_PCFG_XVE_REGISTER_WR_MAP (ga100
++                     * dev_nv_pcfg_xve_regmap.h). Only two are named on any
++                     * published chip: CYA_2 at 0x704 and SW_RESET at 0x718.
++                     * 0x72c -- the cap-publish trigger -- is in this cluster.
++                     * The regmap also confirms LnkCap (0x084) and LnkCap2
++                     * (0x0a4) are RO in the block itself, so the advertise is
++                     * produced upstream of PCFG and this is the nearest
++                     * writable vendor surface to it. Read-only for now.
++                     * NOTE 0x88718 is SW_RESET -- never write this cluster
++                     * blind.
++                     */
++                    NvU32 cyaOff;
++                    for (cyaOff = 0x00088700U; cyaOff <= 0x00088740U; cyaOff += 0x10U)
++                    {
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: XVE_CYA %s 0x%05x: %08x %08x %08x %08x\n",
++                                  "pre ",
++                                  cyaOff,
++                                  GPU_REG_RD32(pGpu, cyaOff),
++                                  (cyaOff + 0x4U <= 0x00088740U) ? GPU_REG_RD32(pGpu, cyaOff + 0x4U) : 0U,
++                                  (cyaOff + 0x8U <= 0x00088740U) ? GPU_REG_RD32(pGpu, cyaOff + 0x8U) : 0U,
++                                  (cyaOff + 0xcU <= 0x00088740U) ? GPU_REG_RD32(pGpu, cyaOff + 0xcU) : 0U);
++                    }
++                }
 +
 +                lc2 = (lc2 & ~0x0000000FU) | tgt;
 +                lc2 = (lc2 & ~0x000F0000U) | 0x000F0000U;
@@ -432,6 +460,34 @@
 +                          GPU_REG_RD32(pGpu, 0x0008872cU),
 +                          GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
 +                          GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                {
++                    /*
++                     * XVE CYA cluster, BAR0 0x88700..0x88740 (cfg 0x700..0x740).
++                     * 17 contiguous dwords, all flagged writable by
++                     * NV_PCFG_XVE_REGISTER_WR_MAP (ga100
++                     * dev_nv_pcfg_xve_regmap.h). Only two are named on any
++                     * published chip: CYA_2 at 0x704 and SW_RESET at 0x718.
++                     * 0x72c -- the cap-publish trigger -- is in this cluster.
++                     * The regmap also confirms LnkCap (0x084) and LnkCap2
++                     * (0x0a4) are RO in the block itself, so the advertise is
++                     * produced upstream of PCFG and this is the nearest
++                     * writable vendor surface to it. Read-only for now.
++                     * NOTE 0x88718 is SW_RESET -- never write this cluster
++                     * blind.
++                     */
++                    NvU32 cyaOff;
++                    for (cyaOff = 0x00088700U; cyaOff <= 0x00088740U; cyaOff += 0x10U)
++                    {
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: XVE_CYA %s 0x%05x: %08x %08x %08x %08x\n",
++                                  "post",
++                                  cyaOff,
++                                  GPU_REG_RD32(pGpu, cyaOff),
++                                  (cyaOff + 0x4U <= 0x00088740U) ? GPU_REG_RD32(pGpu, cyaOff + 0x4U) : 0U,
++                                  (cyaOff + 0x8U <= 0x00088740U) ? GPU_REG_RD32(pGpu, cyaOff + 0x8U) : 0U,
++                                  (cyaOff + 0xcU <= 0x00088740U) ? GPU_REG_RD32(pGpu, cyaOff + 0xcU) : 0U);
++                    }
++                }
 +            }
 +
 +            NvU32 statAfter = GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CTRL_STATUS_ADDR);
