@@ -7,10 +7,21 @@ Any of these is the same die and directly comparable:
 
 | part | ID | notes |
 |---|---|---|
-| A100 40/80GB | `20b0` `20b5` `20f1` | most available |
-| A100 SXM variants | `20b1` `20b2` | fine |
+| A100 PCIe 40 / 80GB | `20f1` / `20b5` | preferred — cleanest control |
+| A100 SXM4 40 / 80GB | `20b0` / `20b2` | fine for everything that matters |
 | A30 | `20b7` | fine |
 | — | `20bb` | the third SKU; ROM already in `roms/` |
+
+Confirm with `lspci -nn`, not the marketing name.
+
+**SXM4 vs PCIe.** SXM4 is still a PCIe endpoint to the host, so the XVE/XP
+block, the PGC6/AON island and the fuse shadows are on-die and read identically
+— including the decisive `0x118f78` bit30. Two groups are weaker controls on
+SXM4: the device-ID fuses (`0x8204d8`, `0x82056c`, which encode the SKU) and the
+board-derived `0x132a00` lane map / `0x137xxx` per-lane registers, since SXM4
+board data differs. Neither is on the critical path. Prefer PCIe mainly because
+SXM4 is usually sold only as a full 8-GPU HGX node — expensive, often
+container-only, sometimes behind NVSwitch.
 
 ## What this settles
 
