@@ -697,3 +697,31 @@ only actionable because `STATUS3` happened to equal a fuse we *did* capture.
 That is the honest boundary of this line of work. Continuing it means a wider
 BAR0 capture from a reference part — `0x8e000` is now in the dumper's `--wide`
 list — rather than more guessing here.
+
+### XP3G fully characterised — not the gate
+
+Second reference capture gave XP3G slot values (the window `0x8e000` was missing
+from the first):
+
+| slot | A100 STATUS | A100 OVR | 170HX STATUS | differs? |
+|---|---|---|---|---|
+| 0 | `0x00000001` | `0` | `0x00000001` natural | no |
+| 1 | `0x00000000` | `0` | — | pending |
+| 2 | `0x00000000` | `0` | — | pending |
+| 3 | `0x00200000` | `0` | `0x16680000` | yes (`OPT_MAGIC`) |
+
+**The A100 runs with no XP3G overrides active at all** — `OVR=0` on every slot,
+so all four statuses are natural values.
+
+Slot 0 looked like a difference only because `0007` forces it: the xp3g-booter
+block writes `VAL0=0` then `OVR0=1`, holding `STATUS0` at zero. Releasing the
+override (`CmpXp3gOvr=0`) moved it `0 -> 1`, matching the A100. `CAP2` stayed
+`0x6`.
+
+So the only real XP3G difference is slot 3, which mirrors `OPT_MAGIC` and was
+already overridden to the A100 value with no effect on the advertise
+([above](#xp3g-override-works--and-is-not-the-gate)).
+
+> `0007` suppressing `STATUS0` is unrelated to gen but is wrong — it forces a bit
+> to zero that an uncrippled part has set. Worth removing when the probe blocks
+> are cleaned up.
