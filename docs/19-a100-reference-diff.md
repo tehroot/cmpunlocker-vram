@@ -210,3 +210,60 @@ CAP2    = 0x00000002      (2.5 GT/s only)
 0x8c2c0 = 0x068731b3      bits 0/13/23 vs A100 are genuine
 0x8c040 = 0x80004c00      bit19 confirmed as this patch's own Gen2 write
 ```
+
+## PUBSWEEP result — the advertise layer is closed
+
+Cold boot, `CmpPubSweep=1`, `CmpGen3Early=1`, `CmpXveCmd=0xe`. Entry state clean
+(`CAP=0x00456101`, `CAP2=0x2`, `0x8872c=0`, `CYA0=0x068731b3`).
+
+| v | rb | CAP | CAP2 | dropped |
+|---|---|---|---|---|
+| `0x00` | `0x00` | `…101` | `0x2` | `0x0` |
+| `0x02` | `0x02` | `…102` | `0x6` | `0x0` |
+| `0x04` | `0x04` | `…101` | `0x2` | `0x4` |
+| `0x06` | `0x06` | `…102` | `0x6` | `0x0` |
+| `0x08` | `0x08` | `…101` | `0x2` | `0x8` |
+| `0x0a` | `0x0a` | `…102` | `0x6` | `0x8` |
+| `0x0c` | `0x0c` | `…101` | `0x2` | `0xc` |
+| `0x0e` | `0x0e` | `…102` | `0x6` | `0x8` |
+| `0x0f` | `0x0f` | `…101` | `0x2` | `0xd` |
+| `0x1e` | `0x0e` | `…102` | `0x6` | `0x18` |
+| `0x3e` | `0x0e` | `…102` | `0x6` | `0x38` |
+
+Three results:
+
+1. **The trigger is live and re-triggerable.** `CAP2` toggles `0x2 ↔ 0x6` eleven
+   times in one boot, `CAP` tracking `…01 ↔ …02`. The one-shot-per-reset
+   hypothesis is excluded, so the warm-reload observation stands.
+2. **`0x8872c` is a 4-bit field.** `0x1e` and `0x3e` both read back `0x0e`.
+3. **Bit3 is never granted, for any input.** Every value requesting 8.0 GT/s
+   reports `dropped` containing `0x8`. The ceiling is `0x6`.
+
+Behaviour is `CAP2 = 0x6` iff `v & 0x2`, except `v=0x0f → 0x2`, so bit0 is a
+qualifier of some kind (`v=0x3` untested).
+
+The permitted mask is fixed upstream of `0x8872c` and is not reachable from the
+advertise layer. Combined with the XP straps being host-RO, **every register-level
+route to Gen3 on this card is now closed.** What remains is the fuse itself,
+which is consistent: `OPT_GEN23=1` / `OPT_GEN3=1` clamping the grantable vector
+is exactly this behaviour.
+
+Also settled: `CYA0` read `0x068731b3` at entry, the clean value, so the earlier
+apparent persistence of the `GEN3_STRAP` write was a warm reboot, not a
+persistent domain. No such finding.
+
+## Next — doc 07 Q1, now the only open route
+
+`FUSE_OVR` (`CmpFuseOvr` / `CmpFuseTest` / `CmpFuseGen`) already implements the
+chain and the control. Staged, because the block's own comment records that
+several failed Booter loads in one run pushed GSP bootstrap into a retry loop:
+
+| run | keys | question |
+|---|---|---|
+| A | `CmpFuseOvr=1` | does `0x820040` become `1`? — is `EN_SW_OVERRIDE` a register |
+| B | `+ CmpFuseTest=1` | does an architecturally-RW OPT fuse take, with the gate open |
+| C | `+ CmpFuseGen=1` | do `OPT_GEN23` / `OPT_GEN3` clear |
+
+A failing is terminal for the fuse route. B taking while C rejects means the OPT
+path is open and the gen fuses are specifically protected — a different problem
+from a global lock.
