@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,929 @@
+@@ -4942,6 +4942,993 @@
                        devId);
          }
  
@@ -689,6 +689,70 @@
 +                }
 +            }
 +            /* ===== END SWEEP ===== */
++
++            /*
++             * Publish-path diff.
++             *
++             * Every register we guessed at leaves CAP2 = 0x6: MAX_RATE,
++             * PL_LINK_RATE, LnkCtl2, CYA_0/1, PRIV_MISC_1, RM policy keys, the
++             * OPT shadows, the feature-override block, and now every field of
++             * 0x118f78. LnkCap/LnkCap2 are RO in the PCFG write map, so the
++             * published value is produced by logic reading something else.
++             *
++             * Rather than guess further: snapshot a 4 KB block, poke the publish
++             * trigger 0x8872c, snapshot again, and report every dword that
++             * moved. Whatever changes alongside CAP (0x88084) and CAP2
++             * (0x880a4) is in the publish path.
++             *
++             * Runs before GEN_EARLY, link still Gen1, CAP2 still 0x2, so the
++             * 0x2 -> 0x6 transition happens inside the diff window.
++             *
++             *   CmpDiff      1 = enable
++             *   CmpDiffBase  block base, default 0x88000 (PCFG). 0x8c000 is the
++             *                XP block; 0x118000 is PGC6.
++             */
++            {
++                static NvU32 diffPre[1024];
++                NvU32 doDiff = 0, diffBase = 0x00088000U, di, changed = 0;
++
++                (void)osReadRegistryDword(pGpu, "CmpDiff", &doDiff);
++                (void)osReadRegistryDword(pGpu, "CmpDiffBase", &diffBase);
++                if (diffBase == 0)
++                    diffBase = 0x00088000U;
++
++                if (doDiff != 0)
++                {
++                    for (di = 0; di < 1024; di++)
++                        diffPre[di] = GPU_REG_RD32(pGpu, diffBase + (di * 4U));
++
++                    NV_PRINTF(LEVEL_ERROR,
++                              "SEC2_DEBUG: DIFF base=0x%06x snapshot taken, CAP=0x%08x CAP2=0x%08x\n",
++                              diffBase,
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++
++                    GPU_REG_WR32(pGpu, 0x0008872cU, 0x00000006U);
++                    (void)GPU_REG_RD32(pGpu, 0x0008872cU);
++
++                    for (di = 0; di < 1024; di++)
++                    {
++                        NvU32 post = GPU_REG_RD32(pGpu, diffBase + (di * 4U));
++                        if (post != diffPre[di])
++                        {
++                            changed++;
++                            NV_PRINTF(LEVEL_ERROR,
++                                      "SEC2_DEBUG: DIFF 0x%06x: 0x%08x -> 0x%08x\n",
++                                      diffBase + (di * 4U), diffPre[di], post);
++                        }
++                    }
++                    NV_PRINTF(LEVEL_ERROR,
++                              "SEC2_DEBUG: DIFF done changed=%u CAP=0x%08x CAP2=0x%08x\n",
++                              changed,
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                }
++            }
++            /* ===== END DIFF ===== */
 +
 +            /*
 +             * Feature-override shadow block dump (read-only).
