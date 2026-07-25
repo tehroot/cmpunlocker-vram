@@ -33,10 +33,18 @@ Minimal set = **6 writes** (`retrain.sh` does only these; the rest of `0007` is 
 - **Enforcement-layer model:** `OPT_GEN23=1` is sensed **once at reset** → seeds a *runtime-writable* XP clamp
   (`DIS_G2`+`MAX_RATE`). It is **not** a continuous SerDes gate. Proof: the clears stick, the fuse never
   re-drives them, and Gen2 trains with the fuse blown.
-- **`LnkCap`/`LnkCap2` = live reflection of the XP clamp**, not a frozen fuse latch (on-card `CAP2 0x2→0x6`
-  when `DIS_G2`/`MAX_RATE` written). Overturns docs 02/03.
-- **Timing:** GSP-RM re-derives `0x85084`←`0x85080` every link derivation. `retrain.sh` wins by writing
-  **after** RM's derivation, then upstream-retraining before the next.
+- ~~**`LnkCap`/`LnkCap2` = live reflection of the XP clamp**, not a frozen fuse latch (on-card `CAP2 0x2→0x6`
+  when `DIS_G2`/`MAX_RATE` written).~~ **[CORRECTED — see [doc 16](16-gen2-cap-reversion-fix.md).]**
+  `DIS_G2` clear + `MAX_RATE=2` **do not** move `CAP2` — measured twice (post-boot via
+  `recon/retrain-diag.sh`, and in-driver: `CAP2=0x2` both before and after the XP writes). The cap follows
+  the **trained rate**: it reaches `0x6` only once the link actually trains Gen2, after which the
+  previously-rejected writes (`0x880A8`, `0x8C1C0`, GPU `LnkCtl2`) start being accepted.
+  Not a frozen fuse latch either — so docs 02/03 stay overturned, but for the right reason.
+- **Timing:** GSP-RM re-derives `0x85084`←`0x85080` every link derivation.
+  **[CORRECTED]** `retrain.sh`'s "write after RM's derivation" framing is wrong for the reversion: `CAP2`
+  is not re-clamped on a timer. It reverts because the link never trained Gen2 inside the Booter window,
+  and by `nv.c` device-init time `0x88xxx` is PLM-re-locked. Fix is to retrain *inside* the window
+  ([doc 16](16-gen2-cap-reversion-fix.md)), not to win a race.
 
 ## SEC2 Booter primitive — reach (decides what a Gen3 patch can touch)
 - 1 HS/L3 arbitrary MMIO write per Booter load (~65 ms), gated on **readback** (status `0xffff` = normal).
