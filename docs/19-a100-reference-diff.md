@@ -267,3 +267,74 @@ several failed Booter loads in one run pushed GSP bootstrap into a retry loop:
 A failing is terminal for the fuse route. B taking while C rejects means the OPT
 path is open and the gen fuses are specifically protected — a different problem
 from a global lock.
+
+## FUSE_OVR runs A and B
+
+**Run A — `EN_SW_OVERRIDE` is a PLM-gated register.** Doc 07's Q1, answered.
+
+```
+begin  EN=0x00000000
+write  0x820040 = 1   status=0xffff   rd=0x00000001
+end    EN=0x00000001
+```
+
+It persists across a module reload — a later run reports `begin EN=0x00000001`.
+This reverses [doc 08](08-vbios-mac-fuse-map-external.md)'s external claim that
+`EN_SW_OVERRIDE` is inert on the 170HX.
+
+`status=0xffff` while the write lands is the established pattern for this
+primitive: the payload write happens regardless of Booter completion. Read `rd=`,
+not `status=`.
+
+Setting `EN` alone changes nothing else — `GEN3`/`GEN23` stay `1`, `CAP2` stays
+`0x2`. It is the gate, not the value.
+
+**Run B — OPT writes are still refused with the gate open.**
+
+```
+CTRL_OPT_NVDEC_DIS(0x820378)=0x0000001e  attempt=0  rd=0x0000001f
+CTRL_OPT_NVDEC_DIS(0x820378)=0x0000001e  attempt=1  rd=0x0000001f
+FAILED to set CTRL_OPT_NVDEC_DIS
+```
+
+`0x820040` takes and `0x820378` does not, through the same SEC2 primitive at the
+same priv level. So this is not a global lock on the fuse block — it is
+per-register, and `EN_SW_OVERRIDE=1` is necessary but not sufficient.
+
+Run C (`CmpFuseGen=1`) would fail for the same reason; not run.
+
+### Hypothesis: OPT readout vs a separate control bank
+
+On several NVIDIA fuse blocks the override is a distinct write register
+(`NV_FUSE_CTRL_OPT_*`) from the resolved read-only value (`NV_FUSE_OPT_*`). The
+`FUSE_OVR` entry is *named* `CTRL_OPT_NVDEC_DIS` but writes `0x820378`, which is
+`NV_FUSE_OPT_NVDEC_DISABLE` — the readout. Writing a readout would no-op exactly
+as observed.
+
+The public `ga100/dev_fuse.h` is stripped of every `CTRL_OPT` name, so the
+candidate was found by value instead. `0x820c00`–`0x820c54` is a compact block
+that differs between the parts and contains a `0x1f` mirroring `NVDEC_DISABLE`:
+
+| offset | A100 | 170HX |
+|---|---|---|
+| `0x820c0c` | `0x00000000` | `0x00000001` |
+| `0x820c1c` | `0x00000040` | `0x00000013` |
+| `0x820c24` | `0x00000000` | `0x0000001f` |
+| `0x820c38` | `0x00000000` | `0x000000ff` |
+| `0x820c3c` | `0x00000001` | `0x000000ff` |
+| `0x820c40` | `0x00000000` | `0x00000001` |
+| `0x820c48` | `0x00000000` | `0x000000ff` |
+| `0x820c4c` | `0x00000000` | `0x00000001` |
+| `0x820c50` | `0x000000ff` | `0x00000001` |
+| `0x820c54` | `0x00000000` | `0x00000001` |
+
+Caveat: `0x820c50` is *inverted* (A100 high, 170HX low), which reads like a count
+rather than a disable mask, so this may be `STATUS_OPT` floorsweeping summary
+rather than a writable control bank. The `0x21000` fuse-ctrl region is
+byte-identical across both parts, so the control is not there.
+
+Settled on-card rather than by inference: write `0x820c24 = 0x1e` via `FEAT_WR`
+and dump `0x820200 +0x400` via `FEAT_DUMP` in the same pass. If `0x820378`
+follows, the control bank is found and the gen mirrors are next. If `0x820c24`
+takes but `0x820378` does not, the block is independent state. If `0x820c24` is
+refused, the fuse block is locked to this primitive entirely.
