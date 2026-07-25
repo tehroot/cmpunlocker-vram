@@ -8,10 +8,13 @@
 ## Result
 
 `app08` — the fuse-processing partition ([doc 03](03-firmware-reverse-engineering.md)) — contains a
-**376-instruction link/PHY bring-up routine at imem `0xcb30`–`0xcfaa`** that **no code in the image
-branches to, calls, or takes the address of.**
+**376-instruction link/PHY bring-up routine at imem `0xcb30`–`0xcfaa`**, and the 170HX build of that
+partition references **76 PHY-space registers the A100 build never touches** (A100-only: 1).
 
-It is not skipped by a runtime fuse check. The call sites do not exist.
+> **[CORRECTED]** The first version of this doc claimed the routine is *unreachable dead code*
+> because neither it nor its predicate is a direct branch/call target. **That claim is withdrawn —
+> the test was invalid.** See §"Reachability — unresolved". The register-footprint asymmetry and the
+> disassembly below stand; the reachability conclusion does not.
 
 ## How it was found
 
@@ -94,16 +97,30 @@ Blocks touched:
 | BIF | `14088088 1408814c 14088150 14088488 1408b980 1408d110 1408e000` |
 | misc | `141c5008 141c5068 141c509c 14820520 14820684` |
 
-### Reachability
+### Reachability — unresolved
 
-| Address | Branch/call target? | Data reference (16/32-bit)? |
+Observations that are solid:
+
+| Address | Direct branch/call target? | Data reference (16/32-bit)? |
 |---|---|---|
-| `0xcb12` predicate | **no** | **no** |
-| `0xcb30` routine | **no** | **no** |
+| `0xcb12` predicate | no | no |
+| `0xcb30` routine | no | no |
 | `0xcb24` | yes — only from `0xcb1c`, the predicate's own branch | no |
-| `0xcb00` (neighbour, for contrast) | yes — from `0x15d4`, `0xc756` | — |
+| `0xcb00` (neighbour) | yes — from `0x15d4`, `0xc756` | — |
 
-With zero indirect control flow in the image, both entry points are unreachable.
+**Why this does not prove unreachability.** Taking "instruction following a `ret`/`mpopaddret`" as a
+proxy for function starts and testing which are branch targets gives an orphan rate of **129/138
+(93.5%)** on the 170HX image and **116/123 (94.3%)** on the A100 image. At that base rate the test
+carries no signal. It also produces false negatives: `0xcf7a` has **26 confirmed `lcall` sites** yet
+is not preceded by a `ret`, so the proxy misses it entirely.
+
+A control-flow walk from the entry at `0x30` was attempted and is **broken** — it reports 4 of 23116
+instructions reachable and marks `0xcf7a` unreachable. Not usable.
+
+So: whether the routine is invoked on this part is **open**. Resolving it needs a real Falcon CFG
+(Ghidra with base 0 and the `fuc5` Sleigh, or a purpose-built walker), not the scripting used here.
+Note the image contains **zero indirect branches or calls**, which does constrain how it could be
+reached — but external dispatch into a fixed imem address remains possible.
 
 ## Why no host-side register work could ever have reached this
 
@@ -114,6 +131,8 @@ entirely.** Reachable only from Falcon. That is the structural reason every swee
 fuse-OPT `0x820xxx`, feature-override `0x8238xx` — was in the wrong address space for this problem.
 
 ## What it implies
+
+*(Conditional on the reachability question above, which is unresolved.)*
 
 Pry §5 obtains **arbitrary HS program-counter control**: the LS signature-verification routine
 issues an unbounded DMA whose length is an adversary-controlled WPR-metadata field, and a uniform
@@ -129,15 +148,17 @@ value.
 
 ## Open / unproven
 
-1. **Identity.** That this routine is *the Gen3* per-rate calibration is inferred from the UPHY
+1. **Reachability.** Unresolved — see above. If the routine *is* invoked normally, the premise of
+   this doc collapses and the register asymmetry needs a different explanation.
+2. **Identity.** That this routine is *the Gen3* per-rate calibration is inferred from the UPHY
    register set plus Pry §6.4, not proven. It may be bring-up for something else.
-2. **Runtime IMEM base.** Addresses here are offsets into the extracted partition. The base at which
+3. **Runtime IMEM base.** Addresses here are offsets into the extracted partition. The base at which
    `app08` is loaded must be confirmed before `0xcb30` is usable as a PC value.
-3. **External dispatch.** Static analysis cannot exclude a caller outside this image entering imem at
+4. **External dispatch.** Static analysis cannot exclude a caller outside this image entering imem at
    a fixed address. No address-taken reference exists in the image, which argues against it.
-4. **Preconditions.** The routine sets up its own pointers in `$r12`/`$r13`/`$r14` and starts with
+5. **Preconditions.** The routine sets up its own pointers in `$r12`/`$r13`/`$r14` and starts with
    `mpush $r5`; whether it needs inputs, and what state it assumes, is unread.
-5. **Predicate inputs.** `0x1411823c[11:10]` and `0x14118f78[30]` are unreadable from the host, so
+6. **Predicate inputs.** `0x1411823c[11:10]` and `0x14118f78[30]` are unreadable from the host, so
    their values on this card are unknown.
 
 ## Reproduce
