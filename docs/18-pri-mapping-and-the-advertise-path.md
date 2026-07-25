@@ -159,8 +159,83 @@ Because the publish re-triggers in-boot, a sweep of N values costs one boot rath
 
 ## Open
 
-1. **The gate contradiction** — every readable precondition satisfied, routine still doesn't run.
+1. **The gate contradiction** — every readable precondition satisfied (all three conditionals on the
+   98-step path pass), routine still doesn't run.
 2. Whether `app08` re-executes on a warm reboot at all. `0x118e80`/`0x118e90` swapped values between
    two consecutive boots, which suggests something reprograms them, but it is not proof.
-3. `0x820584`, the `0x8207d4` group, and the `0x00c03000` triple are unidentified.
+3. `0x820584`, the `0x8207d4`–`0x8207ec` group, and the `0x00c03000` triple are unidentified.
 4. `0x137xxx` naming — the only part of the address mapping without independent corroboration.
+5. The single runtime byte change `0xd9 → 0x99` in the `0x132a0x` source record — what clears bit 6.
+
+## Addendum — the `0x132a0x` lane-map thread, closed
+
+Chased on the theory that a SKU-specific data table fed the PHY registers. It does not. Recorded in
+full because the method errors are more reusable than the result.
+
+### The packer
+
+`app08` IMEM `0x24e1`–`0x25ee` packs bytes from a DMEM structure into PRI registers:
+
+```
+0x132a00 = (old & ~2) | (S[0x36] << 28)
+0x132a04 = S[0x37] | S[0x38]<<8  | S[0x39]<<16 | S[0x3a]<<24
+0x132a08 = S[0x3b] | S[0x3c]<<8  | S[0x3d]<<16 | S[0x3e]<<24
+0x132a0c = S[0x3f] | S[0x40]<<8  | S[0x41]<<16 | S[0x42]<<24
+0x132a10 = S[0x43] | S[0x44]<<8  | S[0x45]<<16 | S[0x46]<<24
+0x132a14 = S[0x47] | S[0x48]<<8  | S[0x49]<<16 | S[0x4a]<<24
+```
+
+`S` is a **structure base in `$r0`** (`mov $r0 0x269` at IMEM `0x23e6`), not absolute DMEM. These are
+field offsets. All six destinations are host-readable and host-writable PRI under the mapping above.
+
+Live values on this card:
+
+```
+0x132a00=100d0001 0x132a04=9901001b 0x132a08=030a0c0d
+0x132a0c=10000000 0x132a10=0000000c 0x132a14=0f25000a
+```
+
+Inverting gives the runtime record `1b 00 01 99 0d 0c 0a 03 00 00 00 10 0c 00 00 00`.
+
+### Why it is not the crippling
+
+The same record appears in **all three** ROMs — 170HX `20c2`, A100 `20b0`, `20bb` — byte-identical
+except that the ROM images carry `d9` where the runtime holds `99` (bit 6 cleared during execution).
+It is not SKU-specific.
+
+### Two method errors, both worth not repeating
+
+**Offset-matching shifted images.** The three DMEM images differ in size (`0x2ae0` / `0x2920` /
+`0x2af0`) and their content is byte-shifted relative to each other, so a fixed-offset comparison is
+meaningless. A naive dword diff of 170HX vs `20bb` reports 1323 of 2744 dwords differing, nearly all
+alignment artifact. An apparent SKU difference at image offset `+0x40` (`1f`-filled on the 170HX,
+`00..08` on both full parts) looked offset-stable and was not — **content-match these images, never
+offset-match them.**
+
+**Reading `D[$rX+disp]` as an absolute address.** `D[$r0+0x40]` is a struct field, not `DMEM[0x40]`.
+Conflating the two is what connected the `+0x40` image difference to this packer in the first place;
+they are unrelated addresses that shared a number.
+
+### Path to the gate
+
+For completeness, the CFG walk from `app08`'s entry to the guarded call at IMEM `0x15a4` is 98 steps
+with exactly three conditionals:
+
+| IMEM | test | on this card |
+|---|---|---|
+| `0xd016` | `bra b 0xd00f` | a memory-clear loop, not a gate |
+| `0x1560` | `DMEM[0x34] & 3 != 0 → skip` | passes — `0x17fc`/`0x16d0`/`0x1810`, aligned in all three builds |
+| `0x1591` | `0x12e0 & 1 != 0 → skip` | passes — measured `0x12e0 = 0x00000020`, bit0 = 0 |
+
+Nothing on the path explains the routine not executing with the gate satisfied. Still open.
+
+### Net
+
+Combined with the three-way code control in [doc 17](17-app08-phy-asymmetry.md), both the code and
+this data structure are common across a crippled and two uncrippled parts. The firmware comparison
+is exhausted; the SKU difference is in fuse values, and the fuse block is globally read-only with all
+twelve OPT PLMs open and HS privilege already available.
+
+What would supply new information: **live registers from an uncrippled GA100.** Every "is this the
+crippling?" question in this thread would have been one query against a working part. Also cheap and
+unfinished: `0x820584` and the `0x8207d4`–`0x8207ec` group, the last unidentified fuse-map entries.
