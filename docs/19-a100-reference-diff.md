@@ -560,3 +560,36 @@ is pinned to two named fuse bits confirmed against live Gen4 silicon.
 
 Burning fuses remains off the table: OTP, irreversible, requires programming
 voltage.
+
+## Methodology correction — posted writes made REVERTED unreliable
+
+Two consecutive `XVE_PERMIT` runs with the same mask:
+
+```
+run 1  b0 0x88c28  pre=0x00000000  post=0x00000000  REVERTED
+run 2  b0 0x88c28  pre=0x0000000f  post=0x0000000f  STUCK
+```
+
+`0x88c28` reads `0x0f` at entry to run 2. Nothing else writes that register, so
+**the run-1 write landed and the immediate readback returned the stale value.**
+These are posted writes; a readback in the next instruction is not a valid test.
+
+This invalidates the verdict method used throughout, because **every `REVERTED`
+result in this document came from an immediate readback**. Specifically at risk:
+
+- the six XP straps in the `GEN3_STRAP` table, recorded above as host-RO
+- `0x8c498` / `0x8c49c`, whose "writes dropped entirely" reading fed the
+  conclusion that the straps are fuse-held
+
+The `FEAT_WR` / `FUSE_OVR` refusals are less suspect: those readbacks happen
+after a Booter load, so far more time elapses. The `OPT_*` results are probably
+sound. The XP strap results are not.
+
+`GEN3_STRAP` and `XVE_PERMIT` now read back twice — once immediately, then again
+after flushing 32 reads through `PMC_BOOT_0` — and the verdict uses the second
+(`post2`). The first (`post`) is still logged so the delay is visible.
+
+**The XP strap table above should be re-run before it is relied on.** What does
+not change: forcing those registers, whether or not the writes landed, never
+moved `CAP` or `CAP2`. The "straps are not the enforcement point" conclusion
+rests on that, not on the `REVERTED` verdicts.

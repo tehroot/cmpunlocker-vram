@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,1662 @@
+@@ -4942,6 +4942,1682 @@
                        devId);
          }
  
@@ -1357,6 +1357,8 @@
 +                            NvU32 pre;
 +                            NvU32 want;
 +                            NvU32 post;
++                            NvU32 post2;
++                            NvU32 fl;
 +
 +                            if ((strapMask & (1U << si)) == 0)
 +                                continue;
@@ -1369,17 +1371,29 @@
 +                            post = GPU_REG_RD32(pGpu, straps[si].addr);
 +
 +                            /*
++                             * These are posted writes: an immediate readback can
++                             * return the stale value. 0x88c28 was recorded
++                             * REVERTED on one run and read back as written at the
++                             * start of the next, so the first readback lied.
++                             * Flush through an unrelated register, then re-read.
++                             */
++                            for (fl = 0; fl < 32U; fl++)
++                                (void)GPU_REG_RD32(pGpu, 0x00000000U);
++                            post2 = GPU_REG_RD32(pGpu, straps[si].addr);
++
++                            /*
 +                             * post != want means the field is RO or re-asserted
 +                             * by the strap -- that is itself the result, and
 +                             * identifies which bit the fuse actually enforces.
 +                             */
 +                            NV_PRINTF(LEVEL_ERROR,
 +                                      "SEC2_DEBUG: GEN3_STRAP b%u %s(0x%06x) "
-+                                      "pre=0x%08x want=0x%08x post=0x%08x %s "
++                                      "pre=0x%08x want=0x%08x post=0x%08x "
++                                      "post2=0x%08x %s "
 +                                      "CAP=0x%08x CAP2=0x%08x\n",
 +                                      si, straps[si].name, straps[si].addr,
-+                                      pre, want, post,
-+                                      (post == want) ? "STUCK" : "REVERTED",
++                                      pre, want, post, post2,
++                                      (post2 == want) ? "STUCK" : "REVERTED",
 +                                      GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
 +                                      GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
 +                        }
@@ -1454,8 +1468,8 @@
 +
 +                        for (pi = 0; pi < (NvU32)(sizeof(permits) / sizeof(permits[0])); pi++)
 +                        {
-+                            NvU32 k;
-+                            NvU32 pre0, post0;
++                            NvU32 k, fl;
++                            NvU32 pre0, post0, post1;
 +
 +                            if ((permitMask & (1U << pi)) == 0)
 +                                continue;
@@ -1466,14 +1480,20 @@
 +                                    permits[pi].addr + (k * 4U), permits[pi].value);
 +                            post0 = GPU_REG_RD32(pGpu, permits[pi].addr);
 +
++                            /* posted write -- flush, then re-read (see GEN3_STRAP) */
++                            for (fl = 0; fl < 32U; fl++)
++                                (void)GPU_REG_RD32(pGpu, 0x00000000U);
++                            post1 = GPU_REG_RD32(pGpu, permits[pi].addr);
++
 +                            NV_PRINTF(LEVEL_ERROR,
 +                                      "SEC2_DEBUG: XVE_PERMIT b%u %s(0x%06x x%u) "
-+                                      "pre=0x%08x want=0x%08x post=0x%08x %s "
++                                      "pre=0x%08x want=0x%08x post=0x%08x "
++                                      "post2=0x%08x %s "
 +                                      "CAP=0x%08x CAP2=0x%08x\n",
 +                                      pi, permits[pi].name, permits[pi].addr,
 +                                      permits[pi].count, pre0, permits[pi].value,
-+                                      post0,
-+                                      (post0 == permits[pi].value) ? "STUCK" : "REVERTED",
++                                      post0, post1,
++                                      (post1 == permits[pi].value) ? "STUCK" : "REVERTED",
 +                                      GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
 +                                      GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
 +                        }
