@@ -11,7 +11,7 @@
  
  #include <sound/core.h>             /* HDA struct snd_card */
  
-@@ -1362,6 +1366,169 @@
+@@ -1362,6 +1366,67 @@
  #endif
  }
  
@@ -22,166 +22,64 @@
 +    struct pci_dev *gpu = nvl->pci_dev;
 +    struct pci_dev *upstream;
 +    void __iomem *bar0;
-+    u16 gpu_ctl2, upstream_ctl2, upstream_ctl, link_status = 0;
-+    u16 gpu_ctl2_rb = 0, upstream_ctl2_rb = 0, prev_status = 0xffff;
-+    u32 gpu_cap = 0, gpu_cap2 = 0, upstream_cap2 = 0, gpu_cap2_post = 0;
-+    u32 cya0, link_config, bar0_cap, bar0_cap2, bar0_lc2, dllla_capable;
-+    int ret, attempt;
++    u16 gpu_ctl2 = 0, upstream_ctl2 = 0, link_status = 0;
++    u32 gpu_cap = 0, gpu_cap2 = 0, upstream_cap2 = 0;
 +
 +#ifndef PCI_EXP_LNKCAP_DLLLARC
 +#define PCI_EXP_LNKCAP_DLLLARC 0x00100000
 +#endif
 +
++    /*
++     * LOGGING ONLY. The retrain itself now happens in 0007's GEN2_LATE
++     * block, inside the window where LnkCap2 still reads 0x6 -- doing it
++     * here was too late: the cap has reverted to 0x2 by device init and
++     * every write that could restore it is rejected (0x88xxx PLM-locked,
++     * 0x8c1c0 clamped, LnkCtl2 refused). See docs/16.
++     * This function is kept as the post-init verification dump: it shows
++     * whether the rate established in the window survived to here.
++     */
 +    if ((gpu == NULL) ||
 +        ((gpu->device != 0x20c2) && (gpu->device != 0x2082)))
 +        return;
 +
 +    upstream = pci_upstream_bridge(gpu);
-+    if (upstream == NULL)
-+    {
-+        NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-+                      "CMP Gen2: no upstream PCIe bridge; skipping link retrain\n");
-+        return;
-+    }
 +
 +    (void)pcie_capability_read_dword(gpu, PCI_EXP_LNKCAP, &gpu_cap);
 +    (void)pcie_capability_read_dword(gpu, PCI_EXP_LNKCAP2, &gpu_cap2);
-+    (void)pcie_capability_read_dword(upstream, PCI_EXP_LNKCAP2, &upstream_cap2);
-+    dllla_capable = (gpu_cap & PCI_EXP_LNKCAP_DLLLARC) ? 1U : 0U;
++    (void)pcie_capability_read_word(gpu, PCI_EXP_LNKCTL2, &gpu_ctl2);
++    (void)pcie_capability_read_word(gpu, PCI_EXP_LNKSTA, &link_status);
++    if (upstream != NULL)
++    {
++        (void)pcie_capability_read_dword(upstream, PCI_EXP_LNKCAP2, &upstream_cap2);
++        (void)pcie_capability_read_word(upstream, PCI_EXP_LNKCTL2, &upstream_ctl2);
++    }
++
 +    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-+                  "CMP Gen2: cfg pre  LnkCap=0x%08x LnkCap2=0x%08x up_LnkCap2=0x%08x DLLLARC=%u\n",
-+                  gpu_cap, gpu_cap2, upstream_cap2, dllla_capable);
++                  "CMP Gen2: verify cfg LnkCap=0x%08x LnkCap2=0x%08x LnkCtl2=0x%04x "
++                  "LnkSta=0x%04x speed=%u width=%u DLLLARC=%u | up LnkCap2=0x%08x LnkCtl2=0x%04x\n",
++                  gpu_cap, gpu_cap2, gpu_ctl2, link_status,
++                  link_status & PCI_EXP_LNKSTA_CLS,
++                  (link_status & PCI_EXP_LNKSTA_NLW) >> 4,
++                  (gpu_cap & PCI_EXP_LNKCAP_DLLLARC) ? 1U : 0U,
++                  upstream_cap2, upstream_ctl2);
 +
 +    bar0 = ioremap(pci_resource_start(gpu, 0), 0x90000);
 +    if (bar0 == NULL)
-+    {
-+        NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-+                      "CMP Gen2: cannot map BAR0; skipping link retrain\n");
 +        return;
-+    }
-+    bar0_cap  = readl(bar0 + 0x88084);
-+    bar0_cap2 = readl(bar0 + 0x880a4);
-+    bar0_lc2  = readl(bar0 + 0x880a8);
-+    cya0 = readl(bar0 + 0x8c2c0);
-+    link_config = readl(bar0 + 0x8c040);
 +    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-+                  "CMP Gen2: bar0 pre  CAP=0x%08x CAP2=0x%08x LC2=0x%08x CYA0=0x%08x CFG0=0x%08x PL=0x%08x\n",
-+                  bar0_cap, bar0_cap2, bar0_lc2, cya0, link_config,
-+                  readl(bar0 + 0x8c1c0));
-+
-+    writel(cya0 & ~(1U << 2), bar0 + 0x8c2c0);
-+    writel((link_config & ~0x000c0000U) | (2U << 18), bar0 + 0x8c040);
-+    writel(0x00000006U, bar0 + 0x8872c);
-+    (void)readl(bar0 + 0x8872c);
-+
-+    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-+                  "CMP Gen2: bar0 post CAP=0x%08x CAP2=0x%08x LC2=0x%08x CYA0=0x%08x CFG0=0x%08x\n",
++                  "CMP Gen2: verify bar0 CAP=0x%08x CAP2=0x%08x LC2=0x%08x CYA0=0x%08x "
++                  "CFG0=0x%08x PL=0x%08x MISC1=0x%08x STAT=0x%08x\n",
 +                  readl(bar0 + 0x88084), readl(bar0 + 0x880a4),
 +                  readl(bar0 + 0x880a8), readl(bar0 + 0x8c2c0),
-+                  readl(bar0 + 0x8c040));
-+
-+    /*
-+     * Bisect the two writes 0007's boot block performs that this function
-+     * historically did not. That block is where CAP2 is observed going
-+     * 0x2 -> 0x6; DIS_G2 + MAX_RATE alone provably do not move it.
-+     * Step A: PL_LINK_RATE. 0x8Cxxx is known writable here (CFG0 took).
-+     * Step B: 0x880A8. 0x88xxx is PLM-locked post-boot; unknown at this
-+     *         point in device init, so the readback is the measurement.
-+     */
-+    writel(0x00240036U, bar0 + 0x8c1c0);
-+    (void)readl(bar0 + 0x8c1c0);
-+    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-+                  "CMP Gen2: stepA PL=0x%08x CAP=0x%08x CAP2=0x%08x\n",
-+                  readl(bar0 + 0x8c1c0), readl(bar0 + 0x88084),
-+                  readl(bar0 + 0x880a4));
-+
-+    bar0_lc2 = readl(bar0 + 0x880a8);
-+    writel(((bar0_lc2 & ~0x0000000fU) | 0x00000002U) | 0x000f0000U,
-+           bar0 + 0x880a8);
-+    (void)readl(bar0 + 0x880a8);
-+    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-+                  "CMP Gen2: stepB LC2 want=0x%08x rb=0x%08x CAP=0x%08x CAP2=0x%08x\n",
-+                  ((bar0_lc2 & ~0x0000000fU) | 0x00000002U) | 0x000f0000U,
-+                  readl(bar0 + 0x880a8), readl(bar0 + 0x88084),
-+                  readl(bar0 + 0x880a4));
++                  readl(bar0 + 0x8c040), readl(bar0 + 0x8c1c0),
++                  readl(bar0 + 0x8841c), readl(bar0 + 0x88088));
 +    iounmap(bar0);
-+    msleep(50);
-+
-+    ret = pcie_capability_read_word(gpu, PCI_EXP_LNKCTL2, &gpu_ctl2);
-+    if (ret)
-+        goto capability_error;
-+    ret = pcie_capability_read_word(upstream, PCI_EXP_LNKCTL2, &upstream_ctl2);
-+    if (ret)
-+        goto capability_error;
-+    gpu_ctl2 = (gpu_ctl2 & ~PCI_EXP_LNKCTL2_TLS) | PCI_EXP_LNKCTL2_TLS_5_0GT;
-+    upstream_ctl2 = (upstream_ctl2 & ~PCI_EXP_LNKCTL2_TLS) | PCI_EXP_LNKCTL2_TLS_5_0GT;
-+    ret = pcie_capability_write_word(gpu, PCI_EXP_LNKCTL2, gpu_ctl2);
-+    if (ret)
-+        goto capability_error;
-+    ret = pcie_capability_write_word(upstream, PCI_EXP_LNKCTL2, upstream_ctl2);
-+    if (ret)
-+        goto capability_error;
-+    (void)pcie_capability_read_word(gpu, PCI_EXP_LNKCTL2, &gpu_ctl2_rb);
-+    (void)pcie_capability_read_word(upstream, PCI_EXP_LNKCTL2, &upstream_ctl2_rb);
-+    (void)pcie_capability_read_dword(gpu, PCI_EXP_LNKCAP2, &gpu_cap2_post);
-+    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-+                  "CMP Gen2: LnkCtl2 gpu want=0x%04x rb=0x%04x  up want=0x%04x rb=0x%04x  LnkCap2=0x%08x\n",
-+                  gpu_ctl2, gpu_ctl2_rb, upstream_ctl2, upstream_ctl2_rb, gpu_cap2_post);
-+
-+    ret = pcie_capability_read_word(upstream, PCI_EXP_LNKCTL, &upstream_ctl);
-+    if (ret)
-+        goto capability_error;
-+    ret = pcie_capability_write_word(upstream, PCI_EXP_LNKCTL,
-+                                     upstream_ctl | PCI_EXP_LNKCTL_RL);
-+    if (ret)
-+        goto capability_error;
-+
-+    for (attempt = 0; attempt < 20; attempt++)
-+    {
-+        msleep(100);
-+        ret = pcie_capability_read_word(gpu, PCI_EXP_LNKSTA, &link_status);
-+        if (ret)
-+        {
-+            NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-+                          "CMP Gen2: LnkSta read failed at t=%d ms (%d)\n",
-+                          (attempt + 1) * 100, ret);
-+            return;
-+        }
-+        if (link_status != prev_status)
-+        {
-+            NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-+                          "CMP Gen2: t=%4d ms LnkSta=0x%04x speed=%u width=%u DLLLA=%u LT=%u\n",
-+                          (attempt + 1) * 100, link_status,
-+                          link_status & PCI_EXP_LNKSTA_CLS,
-+                          (link_status & PCI_EXP_LNKSTA_NLW) >> 4,
-+                          (link_status & PCI_EXP_LNKSTA_DLLLA) ? 1U : 0U,
-+                          (link_status & PCI_EXP_LNKSTA_LT) ? 1U : 0U);
-+            prev_status = link_status;
-+        }
-+        if (((link_status & PCI_EXP_LNKSTA_CLS) >= PCI_EXP_LNKSTA_CLS_5_0GB) &&
-+            ((dllla_capable == 0U) || (link_status & PCI_EXP_LNKSTA_DLLLA)))
-+        {
-+            NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-+                          "CMP Gen2: PCIe link trained to Gen%u after %d ms\n",
-+                          link_status & PCI_EXP_LNKSTA_CLS, (attempt + 1) * 100);
-+            return;
-+        }
-+    }
-+
-+    (void)pcie_capability_read_dword(gpu, PCI_EXP_LNKCAP2, &gpu_cap2_post);
-+    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-+                  "CMP Gen2: retrain completed without Gen2 (LnkSta=0x%04x LnkCap2=0x%08x ret=%d)\n",
-+                  link_status, gpu_cap2_post, ret);
-+    return;
-+capability_error:
-+    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-+                  "CMP Gen2: PCIe capability access failed (%d); skipping link retrain\n", ret);
 +}
 +
  /*
   * Brings up the device on the first file open. Assumes nvl->ldata_lock is held.
   */
-@@ -1530,6 +1697,8 @@
+@@ -1530,6 +1595,8 @@
          nv->flags |= NV_FLAG_PERSISTENT_SW_STATE;
      }
  
