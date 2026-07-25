@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,1206 @@
+@@ -4942,6 +4942,1316 @@
                        devId);
          }
  
@@ -794,6 +794,116 @@
 +            }
 +            /* ===== END DIFF ===== */
 +
++            /* ===== BEGIN FUSE_MACRO =====
++             * Drive the fuse macro register file directly.
++             *
++             * Established on-card (docs/19):
++             *   - OPT_* (0x8201xx-0x8207xx) refuse writes; they are readouts.
++             *   - STATUS_OPT_* (0x820Cxx) is RO by architecture (t234 header
++             *     names NV_FUSE_STATUS_OPT_DISPLAY 0x00820C04 as R-I4R).
++             *   - EN_SW_OVERRIDE (0x820040) IS writable and persists across a
++             *     module reload -- but setting it does not make OPT_* writable.
++             *   - FUSEADDR (0x820004) IS writable: FEAT_WR 0x1fb -> 0x1fc took.
++             *
++             * So the macro is live and accepts writes. Layout, matching the
++             * standard NVIDIA fuse-macro register file and identical on the
++             * A100 reference part:
++             *
++             *   0x820000 FUSECTRL   CMD[1:0], STATE[20:16]  (0xe0040000 = idle)
++             *   0x820004 FUSEADDR   row select
++             *   0x820008 FUSERDATA  read data
++             *   0x82000c FUSEWDATA  write data
++             *   0x820010 FUSETIME
++             *
++             * This block issues READ commands only. It never writes FUSEWDATA
++             * and never issues CMD=WRITE -- burning a fuse is irreversible,
++             * needs programming voltage, and is not the goal. The goal is to
++             * map which row/bit carries OPT_GEN23 / OPT_GEN3.
++             *
++             * First it probes whether the macro takes a plain GPU_REG_WR32. If
++             * it does, rows can be swept in a loop instead of costing a Booter
++             * load per write, which is what makes a full array dump practical.
++             *
++             *   CmpFuseRd    1 = enable
++             *   CmpFuseRow   first row, default 0
++             *   CmpFuseCnt   row count, default 16 (capped at 256)
++             */
++            {
++                NvU32 fuseRd = 0, fuseRow = 0, fuseCnt = 16;
++
++                (void)osReadRegistryDword(pGpu, "CmpFuseRd",  &fuseRd);
++                (void)osReadRegistryDword(pGpu, "CmpFuseRow", &fuseRow);
++                (void)osReadRegistryDword(pGpu, "CmpFuseCnt", &fuseCnt);
++
++                if (fuseRd != 0)
++                {
++                    NvU32 savedAddr = GPU_REG_RD32(pGpu, 0x00820004U);
++                    NvU32 ctrl0     = GPU_REG_RD32(pGpu, 0x00820000U);
++                    NvU32 probe;
++                    NvU32 hostWr;
++                    NvU32 r;
++
++                    if (fuseCnt == 0 || fuseCnt > 256U)
++                        fuseCnt = 16U;
++
++                    /* Is the macro writable without the SEC2 primitive? */
++                    GPU_REG_WR32(pGpu, 0x00820004U, savedAddr ^ 0x1U);
++                    probe  = GPU_REG_RD32(pGpu, 0x00820004U);
++                    hostWr = (probe == (savedAddr ^ 0x1U)) ? 1U : 0U;
++                    GPU_REG_WR32(pGpu, 0x00820004U, savedAddr);
++
++                    NV_PRINTF(LEVEL_ERROR,
++                              "SEC2_DEBUG: FUSE_MACRO begin hostwr=%u CTRL=0x%08x "
++                              "ADDR=0x%08x RDATA=0x%08x WDATA=0x%08x EN=0x%08x\n",
++                              hostWr, ctrl0, savedAddr,
++                              GPU_REG_RD32(pGpu, 0x00820008U),
++                              GPU_REG_RD32(pGpu, 0x0082000cU),
++                              GPU_REG_RD32(pGpu, 0x00820040U));
++
++                    if (hostWr != 0)
++                    {
++                        for (r = fuseRow; r < fuseRow + fuseCnt; r++)
++                        {
++                            NvU32 spin;
++                            NvU32 st = 0;
++                            NvU32 rdata;
++
++                            GPU_REG_WR32(pGpu, 0x00820004U, r);
++                            GPU_REG_WR32(pGpu, 0x00820000U,
++                                         (ctrl0 & ~0x00000003U) | 0x00000001U);
++
++                            /* Bounded poll for STATE[20:16] back to idle (4). */
++                            for (spin = 0; spin < 10000U; spin++)
++                            {
++                                st = GPU_REG_RD32(pGpu, 0x00820000U);
++                                if (((st >> 16) & 0x1FU) == 0x4U &&
++                                    (st & 0x3U) == 0U)
++                                    break;
++                            }
++
++                            rdata = GPU_REG_RD32(pGpu, 0x00820008U);
++
++                            NV_PRINTF(LEVEL_ERROR,
++                                      "SEC2_DEBUG: FUSE_MACRO row=0x%03x CTRL=0x%08x "
++                                      "spin=%u RDATA=0x%08x\n",
++                                      r, st, spin, rdata);
++                        }
++
++                        GPU_REG_WR32(pGpu, 0x00820004U, savedAddr);
++                        GPU_REG_WR32(pGpu, 0x00820000U, ctrl0);
++                    }
++
++                    NV_PRINTF(LEVEL_ERROR,
++                              "SEC2_DEBUG: FUSE_MACRO end CTRL=0x%08x ADDR=0x%08x "
++                              "GEN23=0x%08x GEN3=0x%08x\n",
++                              GPU_REG_RD32(pGpu, 0x00820000U),
++                              GPU_REG_RD32(pGpu, 0x00820004U),
++                              GPU_REG_RD32(pGpu, 0x0082057cU),
++                              GPU_REG_RD32(pGpu, 0x00820580U));
++                }
++            }
++            /* ===== END FUSE_MACRO ===== */
++
 +            /*
 +             * Feature-override shadow block dump (read-only).
 +             *
@@ -1207,3 +1317,367 @@
          plmStatus = kgspSec2PostblTimingRebuildStockSignature(pGpu, pKernelGsp);
          if (plmStatus != NV_OK)
          {
+--- a/src/nvidia/src/kernel/gpu/gsp/arch/turing/kernel_gsp_tu102.c
++++ b/src/nvidia/src/kernel/gpu/gsp/arch/turing/kernel_gsp_tu102.c
+@@ -611,6 +611,361 @@
+         }
+     }
+ 
++
++    {
++        NvU32 lateDevId = pGpu->idInfo.PCIDeviceID >> 16;
++        if ((lateDevId == 0x20C2 || lateDevId == 0x2082) && status == NV_OK)
++        {
++            #define PCIE_GEN2_PRIV_MISC_1_ADDR_LATE     0x0008841cU
++            #define PCIE_GEN2_PRIV_MISC_1_GEN2_EN_LATE  ((1U << 11) | (1U << 13))
++            #define PCIE_GEN2_PRIV_MISC_1_GEN2_VAL_LATE ((1U << 12) | (1U << 14))
++            NvU32 misc1Late = GPU_REG_RD32(pGpu, PCIE_GEN2_PRIV_MISC_1_ADDR_LATE);
++            NvU32 misc1WantLate = (misc1Late | PCIE_GEN2_PRIV_MISC_1_GEN2_EN_LATE)
++                                  & ~PCIE_GEN2_PRIV_MISC_1_GEN2_VAL_LATE;
++            GPU_REG_WR32(pGpu, PCIE_GEN2_PRIV_MISC_1_ADDR_LATE, misc1WantLate);
++            NV_PRINTF(LEVEL_ERROR,
++                      "SEC2_DEBUG: PCIe PRIV_MISC_1 late pre=0x%08x post=0x%08x\n",
++                      misc1Late,
++                      GPU_REG_RD32(pGpu, PCIE_GEN2_PRIV_MISC_1_ADDR_LATE));
++            NV_PRINTF(LEVEL_ERROR,
++                      "SEC2_DEBUG: GEN2_LATE entry CAP=0x%08x CAP2=0x%08x LC2=0x%08x "
++                      "CYA0=0x%08x CFG0=0x%08x\n",
++                      GPU_REG_RD32(pGpu, 0x00088084U),
++                      GPU_REG_RD32(pGpu, 0x000880a4U),
++                      GPU_REG_RD32(pGpu, 0x000880a8U),
++                      GPU_REG_RD32(pGpu, 0x0008c2c0U),
++                      GPU_REG_RD32(pGpu, 0x0008c040U));
++            {
++                NvU32 cyaLate = GPU_REG_RD32(pGpu, 0x0008c2c0U);
++                cyaLate = cyaLate & ~(1U << 2);
++                GPU_REG_WR32(pGpu, 0x0008c2c0U, cyaLate);
++                NV_PRINTF(LEVEL_ERROR,
++                          "SEC2_DEBUG: PCIe CYA_0 late clear DIS_G2: 0x%08x (bit2=%u)\n",
++                          GPU_REG_RD32(pGpu, 0x0008c2c0U),
++                          (GPU_REG_RD32(pGpu, 0x0008c2c0U) >> 2) & 1U);
++                NvU32 linkCfgLate = GPU_REG_RD32(pGpu, 0x0008c040U);
++                linkCfgLate = (linkCfgLate & ~0x000C0000U) | (0x2U << 18);
++                GPU_REG_WR32(pGpu, 0x0008c040U, linkCfgLate);
++                NV_PRINTF(LEVEL_ERROR,
++                          "SEC2_DEBUG: PCIe LINK_CONFIG_0 late MAX_RATE=2: 0x%08x\n",
++                          GPU_REG_RD32(pGpu, 0x0008c040U));
++                GPU_REG_WR32(pGpu, 0x0008872cU, 0x00000006U);
++                NV_PRINTF(LEVEL_ERROR,
++                          "SEC2_DEBUG: PCIe XVE_OVR late=0x%08x\n",
++                          GPU_REG_RD32(pGpu, 0x0008872cU));
++                NV_PRINTF(LEVEL_ERROR,
++                          "SEC2_DEBUG: GEN2_LATE exit  CAP=0x%08x CAP2=0x%08x LC2=0x%08x\n",
++                          GPU_REG_RD32(pGpu, 0x00088084U),
++                          GPU_REG_RD32(pGpu, 0x000880a4U),
++                          GPU_REG_RD32(pGpu, 0x000880a8U));
++
++                /*
++                 * Upstream-driven retrain, here rather than in nv.c.
++                 * CAP2 reads 0x6 in this block and 0x2 by the time nv.c
++                 * device init runs, and every write that could restore it
++                 * is rejected there (0x88xxx PLM-locked, 0x8c1c0 clamped).
++                 * The GPU side is already staged: LC2=0x2, DIS_G2 clear,
++                 * MAX_RATE=2. Only the upstream bridge's TargetLinkSpeed
++                 * and Retrain-Link bit are missing, and an endpoint cannot
++                 * retrain itself.
++                 */
++                {
++                    NvU32 dom    = gpuGetDomain(pGpu);
++                    NvU8  gpuBus = gpuGetBus(pGpu);
++                    void *upH    = NULL;
++                    NvU8  upBus = 0, upDev = 0, upFn = 0, capPtr = 0;
++                    NvU16 vend, devid;
++                    NvU32 bbus, bdev, bfn, poll;
++
++                    for (bbus = 0; (bbus < gpuBus) && (upH == NULL); bbus++)
++                    {
++                        for (bdev = 0; (bdev < 32) && (upH == NULL); bdev++)
++                        {
++                            for (bfn = 0; (bfn < 8) && (upH == NULL); bfn++)
++                            {
++                                void *h = osPciInitHandle(dom, (NvU8)bbus,
++                                              (NvU8)bdev, (NvU8)bfn,
++                                              &vend, &devid);
++                                if (h == NULL)
++                                    continue;
++                                if ((osPciReadByte(h, 0x0E) & 0x7F) != 0x01)
++                                    continue;
++                                if (osPciReadByte(h, 0x19) == gpuBus)
++                                {
++                                    upH   = h;
++                                    upBus = (NvU8)bbus;
++                                    upDev = (NvU8)bdev;
++                                    upFn  = (NvU8)bfn;
++                                }
++                            }
++                        }
++                    }
++
++                    if (upH == NULL)
++                    {
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: GEN2_LATE no upstream bridge for bus %02x\n",
++                                  gpuBus);
++                    }
++                    else
++                    {
++                        if (osPciReadWord(upH, 0x06) & 0x10)
++                        {
++                            capPtr = osPciReadByte(upH, 0x34);
++                            while ((capPtr != 0) && (capPtr != 0xFF))
++                            {
++                                if (osPciReadByte(upH, capPtr) == 0x10)
++                                    break;
++                                capPtr = osPciReadByte(upH, capPtr + 1);
++                            }
++                        }
++
++                        if ((capPtr == 0) || (capPtr == 0xFF))
++                        {
++                            NV_PRINTF(LEVEL_ERROR,
++                                      "SEC2_DEBUG: GEN2_LATE upstream %02x:%02x.%x has no PCIe cap\n",
++                                      upBus, upDev, upFn);
++                        }
++                        else
++                        {
++                            NvU16 uLc2 = osPciReadWord(upH, capPtr + 0x30);
++                            NvU16 uLc;
++                            NvU32 stat = 0;
++
++                            osPciWriteWord(upH, capPtr + 0x30,
++                                           (NvU16)((uLc2 & ~0x000FU) | 0x0002U));
++                            uLc = osPciReadWord(upH, capPtr + 0x10);
++                            osPciWriteWord(upH, capPtr + 0x10,
++                                           (NvU16)(uLc | 0x0020U));
++
++                            for (poll = 0; poll < 20; poll++)
++                            {
++                                osDelay(10);
++                                stat = GPU_REG_RD32(pGpu, 0x00088088U);
++                                if (((stat >> 16) & 0xFU) >= 2U)
++                                    break;
++                            }
++
++                            NV_PRINTF(LEVEL_ERROR,
++                                      "SEC2_DEBUG: GEN2_LATE retrain up=%02x:%02x.%x cap=0x%02x "
++                                      "lc2 0x%04x->0x%04x t=%u ms STAT=0x%08x speed=%u "
++                                      "CAP=0x%08x CAP2=0x%08x\n",
++                                      upBus, upDev, upFn, capPtr, uLc2,
++                                      osPciReadWord(upH, capPtr + 0x30),
++                                      (poll + 1) * 10, stat,
++                                      (stat >> 16) & 0xFU,
++                                      GPU_REG_RD32(pGpu, 0x00088084U),
++                                      GPU_REG_RD32(pGpu, 0x000880a4U));
++
++                            /*
++                             * ---- Gen3 ladder (opt-in) ----------------------
++                             * Runs only after Gen2 has actually trained. That
++                             * ordering is load-bearing: 0x8c1c0 and 0x880a8 are
++                             * rejected at Gen1 and only accept writes once the
++                             * link is at Gen2 (docs/16). So Gen3 is a second
++                             * step on top of Gen2, never a substitution.
++                             *
++                             * Enable per boot with the regkey:
++                             *   options nvidia NVreg_RegistryDwords="CmpTryGen3=1"
++                             *
++                             * Deltas vs the Gen2 state, all small: MAX_RATE
++                             * 2->3 (stock is already 3), PL_LINK_RATE
++                             * [21:20] 2->3, TargetLinkSpeed 3 on both ends.
++                             * On failure the Gen2 state is restored and the
++                             * link retrained back before boot continues.
++                             */
++                            {
++                                NvU32 tryGen3 = 0;
++
++                                if ((osReadRegistryDword(pGpu, "CmpTryGen3",
++                                                         &tryGen3) == NV_OK) &&
++                                    (tryGen3 != 0) &&
++                                    (((stat >> 16) & 0xFU) >= 2U))
++                                {
++                                    NvU32 sMaxRate = GPU_REG_RD32(pGpu, 0x0008c040U);
++                                    NvU32 sPlRate  = GPU_REG_RD32(pGpu, 0x0008c1c0U);
++                                    NvU32 sGpuLc2  = GPU_REG_RD32(pGpu, 0x000880a8U);
++                                    NvU32 sCya0    = GPU_REG_RD32(pGpu, 0x0008c2c0U);
++                                    NvU32 sCya1    = GPU_REG_RD32(pGpu, 0x0008c300U);
++                                    NvU32 sMisc1   = GPU_REG_RD32(pGpu, 0x0008841cU);
++                                    NvU16 sUpLc2   = osPciReadWord(upH, capPtr + 0x30);
++                                    NvU32 g3stat   = 0;
++                                    NvU32 g3poll;
++
++                                    /*
++                                     * Bisect masks, all default 0 (no-op). Each is
++                                     * applied before the Gen3 staging writes and
++                                     * restored on failure with everything else:
++                                     *   CmpGen3Cya   bits to CLEAR in 0x8c2c0 (CYA_0)
++                                     *   CmpGen3Cya1  bits to CLEAR in 0x8c300 (CYA_1)
++                                     *   CmpGen3Misc1 bits to SET   in 0x8841c (PRIV_MISC_1)
++                                     * Stock CYA_0 is 0x068731b7: bit2 is DIS_G2 (already
++                                     * cleared for Gen2), bit3 is clear at reset, so the
++                                     * standing DIS_G3 candidate is bit4 -> CmpGen3Cya=0x10.
++                                     */
++                                    NvU32 cyaMask = 0, cya1Mask = 0, misc1Mask = 0;
++                                    NvU32 cyaSet = 0, cya1Set = 0, misc1Clr = 0;
++                                    /*
++                                     * Direct writes to the capability registers
++                                     * themselves. 0x88xxx is writable in this window
++                                     * (0x880a8 and 0x8872c both land here), but
++                                     * 0x880a4 / 0x88084 have never been written at
++                                     * any point. docs 02/03 assumed they were fused
++                                     * hardware; that predates knowing the value moves.
++                                     *   CmpGen3Cap2Set   bits to OR into 0x880a4
++                                     *                    LnkCap2[7:1] speed vector,
++                                     *                    bit1=2.5 bit2=5.0 bit3=8.0,
++                                     *                    so 0x6 -> 0xe is set 0x8
++                                     *   CmpGen3CapSpeed  value for 0x88084[3:0]
++                                     *                    MaxLinkSpeed, 3 = 8 GT/s
++                                     */
++                                    NvU32 cap2Set = 0, capSpeed = 0;
++                                    NvU32 sCap    = GPU_REG_RD32(pGpu, 0x00088084U);
++                                    NvU32 sCap2   = GPU_REG_RD32(pGpu, 0x000880a4U);
++
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3Cya", &cyaMask);
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3Cya1", &cya1Mask);
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3Misc1", &misc1Mask);
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3CyaSet", &cyaSet);
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3Cya1Set", &cya1Set);
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3Misc1Clr", &misc1Clr);
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3Cap2Set", &cap2Set);
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3CapSpeed", &capSpeed);
++
++                                    if (cap2Set != 0)
++                                    {
++                                        GPU_REG_WR32(pGpu, 0x000880a4U, sCap2 | cap2Set);
++                                        NV_PRINTF(LEVEL_ERROR,
++                                                  "SEC2_DEBUG: GEN3_TRY cap2 0x%08x->0x%08x (set 0x%08x)\n",
++                                                  sCap2, GPU_REG_RD32(pGpu, 0x000880a4U), cap2Set);
++                                    }
++                                    if (capSpeed != 0)
++                                    {
++                                        GPU_REG_WR32(pGpu, 0x00088084U,
++                                                     (sCap & ~0x0000000FU) | (capSpeed & 0x0000000FU));
++                                        NV_PRINTF(LEVEL_ERROR,
++                                                  "SEC2_DEBUG: GEN3_TRY cap  0x%08x->0x%08x (speed %u)\n",
++                                                  sCap, GPU_REG_RD32(pGpu, 0x00088084U), capSpeed);
++                                    }
++
++                                    if ((cyaMask | cyaSet) != 0)
++                                        GPU_REG_WR32(pGpu, 0x0008c2c0U,
++                                                     (sCya0 & ~cyaMask) | cyaSet);
++                                    if ((cya1Mask | cya1Set) != 0)
++                                        GPU_REG_WR32(pGpu, 0x0008c300U,
++                                                     (sCya1 & ~cya1Mask) | cya1Set);
++                                    if ((misc1Mask | misc1Clr) != 0)
++                                        GPU_REG_WR32(pGpu, 0x0008841cU,
++                                                     (sMisc1 & ~misc1Clr) | misc1Mask);
++
++                                    if ((cyaMask | cya1Mask | misc1Mask |
++                                         cyaSet | cya1Set | misc1Clr) != 0)
++                                        NV_PRINTF(LEVEL_ERROR,
++                                                  "SEC2_DEBUG: GEN3_TRY bisect CYA0 0x%08x->0x%08x (clr 0x%08x set 0x%08x) "
++                                                  "CYA1 0x%08x->0x%08x (clr 0x%08x set 0x%08x) "
++                                                  "MISC1 0x%08x->0x%08x (set 0x%08x clr 0x%08x)\n",
++                                                  sCya0, GPU_REG_RD32(pGpu, 0x0008c2c0U), cyaMask, cyaSet,
++                                                  sCya1, GPU_REG_RD32(pGpu, 0x0008c300U), cya1Mask, cya1Set,
++                                                  sMisc1, GPU_REG_RD32(pGpu, 0x0008841cU), misc1Mask, misc1Clr);
++
++                                    GPU_REG_WR32(pGpu, 0x0008c040U,
++                                                 (sMaxRate & ~0x000C0000U) | (0x3U << 18));
++                                    GPU_REG_WR32(pGpu, 0x0008c1c0U, 0x00340036U);
++                                    GPU_REG_WR32(pGpu, 0x000880a8U,
++                                                 (sGpuLc2 & ~0x0000000FU) | 0x00000003U);
++                                    osPciWriteWord(upH, capPtr + 0x30,
++                                                   (NvU16)((sUpLc2 & ~0x000FU) | 0x0003U));
++
++                                    NV_PRINTF(LEVEL_ERROR,
++                                              "SEC2_DEBUG: GEN3_TRY staged CFG0=0x%08x PL=0x%08x "
++                                              "LC2=0x%08x upLC2=0x%04x CAP=0x%08x CAP2=0x%08x\n",
++                                              GPU_REG_RD32(pGpu, 0x0008c040U),
++                                              GPU_REG_RD32(pGpu, 0x0008c1c0U),
++                                              GPU_REG_RD32(pGpu, 0x000880a8U),
++                                              osPciReadWord(upH, capPtr + 0x30),
++                                              GPU_REG_RD32(pGpu, 0x00088084U),
++                                              GPU_REG_RD32(pGpu, 0x000880a4U));
++
++                                    osPciWriteWord(upH, capPtr + 0x10,
++                                        (NvU16)(osPciReadWord(upH, capPtr + 0x10) | 0x0020U));
++
++                                    for (g3poll = 0; g3poll < 20; g3poll++)
++                                    {
++                                        osDelay(10);
++                                        g3stat = GPU_REG_RD32(pGpu, 0x00088088U);
++                                        if (((g3stat >> 16) & 0xFU) >= 3U)
++                                            break;
++                                    }
++
++                                    /*
++                                     * LnkSta2 is the EQ oracle doc 13 wanted and
++                                     * could not reach: GPU side is 0x880a8[31:16],
++                                     * upstream side is cap+0x32. Bit [0] is Current
++                                     * De-emphasis Level, NOT an EQ bit -- the EQ bits
++                                     * are [1] Complete, [2] Phase1, [3] Phase2,
++                                     * [4] Phase3, [5] Link Equalization Request.
++                                     * LnkSta2=0x0001 therefore means no EQ bit set at
++                                     * all, i.e. the LTSSM never attempted 8 GT/s.
++                                     */
++                                    NV_PRINTF(LEVEL_ERROR,
++                                              "SEC2_DEBUG: GEN3_TRY result t=%u ms STAT=0x%08x speed=%u "
++                                              "CAP=0x%08x CAP2=0x%08x LnkSta2=0x%04x upLnkSta2=0x%04x\n",
++                                              (g3poll + 1) * 10, g3stat,
++                                              (g3stat >> 16) & 0xFU,
++                                              GPU_REG_RD32(pGpu, 0x00088084U),
++                                              GPU_REG_RD32(pGpu, 0x000880a4U),
++                                              (NvU16)(GPU_REG_RD32(pGpu, 0x000880a8U) >> 16),
++                                              osPciReadWord(upH, capPtr + 0x32));
++
++                                    if (((g3stat >> 16) & 0xFU) < 3U)
++                                    {
++                                        /* self-heal: restore the Gen2 state and retrain back */
++                                        GPU_REG_WR32(pGpu, 0x0008c040U, sMaxRate);
++                                        GPU_REG_WR32(pGpu, 0x0008c1c0U, sPlRate);
++                                        GPU_REG_WR32(pGpu, 0x000880a8U, sGpuLc2);
++                                        if ((cyaMask | cyaSet) != 0)
++                                            GPU_REG_WR32(pGpu, 0x0008c2c0U, sCya0);
++                                        if ((cya1Mask | cya1Set) != 0)
++                                            GPU_REG_WR32(pGpu, 0x0008c300U, sCya1);
++                                        if ((misc1Mask | misc1Clr) != 0)
++                                            GPU_REG_WR32(pGpu, 0x0008841cU, sMisc1);
++                                        if (cap2Set != 0)
++                                            GPU_REG_WR32(pGpu, 0x000880a4U, sCap2);
++                                        if (capSpeed != 0)
++                                            GPU_REG_WR32(pGpu, 0x00088084U, sCap);
++                                        osPciWriteWord(upH, capPtr + 0x30, sUpLc2);
++                                        osPciWriteWord(upH, capPtr + 0x10,
++                                            (NvU16)(osPciReadWord(upH, capPtr + 0x10) | 0x0020U));
++
++                                        for (g3poll = 0; g3poll < 20; g3poll++)
++                                        {
++                                            osDelay(10);
++                                            g3stat = GPU_REG_RD32(pGpu, 0x00088088U);
++                                            if (((g3stat >> 16) & 0xFU) >= 2U)
++                                                break;
++                                        }
++                                        NV_PRINTF(LEVEL_ERROR,
++                                                  "SEC2_DEBUG: GEN3_TRY reverted t=%u ms STAT=0x%08x "
++                                                  "speed=%u CAP2=0x%08x\n",
++                                                  (g3poll + 1) * 10, g3stat,
++                                                  (g3stat >> 16) & 0xFU,
++                                                  GPU_REG_RD32(pGpu, 0x000880a4U));
++                                    }
++                                }
++                                else
++                                {
++                                    NV_PRINTF(LEVEL_ERROR,
++                                              "SEC2_DEBUG: GEN3_TRY skipped (regkey CmpTryGen3=%u, speed=%u)\n",
++                                              tryGen3, (stat >> 16) & 0xFU);
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
++    }
++
+     if (status != NV_OK)
+     {
+         NV_PRINTF(LEVEL_ERROR, "failed to execute Booter Load (ucode for initial boot): 0x%x\n", status);

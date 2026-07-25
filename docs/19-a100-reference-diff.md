@@ -389,3 +389,42 @@ the whole fuse block except `0x820040` is closed to this primitive.
 
 `FUSECTRL` (`0x820000`) is deliberately not written first — it carries the
 command field and could start a sense cycle mid-boot.
+
+## The fuse macro accepts writes
+
+`FEAT_WR 0x820004 = 0x1fc` → `rd=0x000001fc`. Confirmed in the same dump:
+
+```
+0x820000  e0040000   FUSECTRL   STATE=4 (idle), CMD=0
+0x820004  000001fc   FUSEADDR   <-- our write
+0x820008  a0802007   FUSERDATA
+0x82000c  00000000   FUSEWDATA
+0x820040  00000001   EN_SW_OVERRIDE (persisting)
+```
+
+`FUSECTRL` did not move on its own, so nothing auto-triggered.
+
+Using the macro needs two writes in sequence (`FUSEADDR` then `FUSECTRL`), which
+`FEAT_WR` cannot express — it is one address/value pair per invocation. Hence
+`FUSE_MACRO` (`CmpFuseRd` / `CmpFuseRow` / `CmpFuseCnt`).
+
+It issues **READ commands only**. It never writes `FUSEWDATA` and never issues
+`CMD=WRITE`: burning a fuse is irreversible, needs programming voltage, and is
+not the objective. The objective is to map which row and bit carry `OPT_GEN23` /
+`OPT_GEN3`.
+
+It first probes whether the macro takes a plain `GPU_REG_WR32`. If it does, rows
+sweep in a loop rather than costing a Booter load per write, which is what makes
+a full array dump practical.
+
+Interpreting `hostwr`:
+
+- `hostwr=1` → the macro is host-writable; the row sweep runs and dumps
+  `FUSERDATA` per row.
+- `hostwr=0` → the macro needs the SEC2 primitive for every write, and a sweep
+  costs two Booter loads per row. Still possible, just slow.
+
+Note the standing caveat on the earlier PLM claim: `FEAT_PLM=0xffffffff` was read
+from the FEAT region's own mask registers, not from a mask covering `0x820378`.
+"PLM is not the blocker" is therefore weaker than stated above — it holds for the
+region the header reported, not necessarily for the OPT bank.
