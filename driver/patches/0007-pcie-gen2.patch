@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,349 @@
+@@ -4942,6 +4942,445 @@
                        devId);
          }
  
@@ -191,6 +191,102 @@
 +                    if (!wrote)
 +                        NV_PRINTF(LEVEL_ERROR,
 +                                  "SEC2_DEBUG: PCIe PRIV_MISC_1 booter FAILED\n");
++                }
++
++                /*
++                 * Fuse-OPT override, via the same Booter arbitrary-write
++                 * primitive. Runs here so it lands BEFORE the GEN_EARLY block
++                 * pokes 0x8872c, which is the cap-publish trigger.
++                 *
++                 * Standing question from doc 07 Q1 / doc 09: the beta wrote
++                 * OPT_GEN23 and it was rejected, but EN_SW_OVERRIDE (0x820040)
++                 * was never set first, so OPT writes were being discarded by a
++                 * gate that had never been opened. Untested since.
++                 *
++                 * Motivation now: with MAX_RATE=3 the publish still emits
++                 * CAP=0x00456102 / CAP2=0x6, so a Gen2 clamp sits between the
++                 * XP ceiling and LnkCap. OPT_GEN3 feeding that clamp is the
++                 * remaining reachable hypothesis.
++                 *
++                 * CmpFuseOvr = value written to EN_SW_OVERRIDE, 0 = disabled.
++                 * The encoding of 0x820040 is not in any header available here,
++                 * so try 1 and 0xffffffff.
++                 *
++                 * Readback distinguishes the outcomes: OPT_GEN3 reading 0x0
++                 * means the shadow is writable once the gate is open and any
++                 * remaining clamp is elsewhere; still 0x1 means hard-RO even
++                 * with the override enabled.
++                 */
++                {
++                    NvU32 fuseOvr = 0;
++
++                    (void)osReadRegistryDword(pGpu, "CmpFuseOvr", &fuseOvr);
++                    if (fuseOvr != 0)
++                    {
++                        struct { NvU32 addr; NvU32 value; const char *name; } fuseSeq[3];
++                        NvU32 fi;
++
++                        fuseSeq[0].addr  = 0x00820040U;
++                        fuseSeq[0].value = fuseOvr;
++                        fuseSeq[0].name  = "EN_SW_OVERRIDE";
++                        fuseSeq[1].addr  = 0x00820580U;
++                        fuseSeq[1].value = 0x00000000U;
++                        fuseSeq[1].name  = "OPT_GEN3";
++                        fuseSeq[2].addr  = 0x0082057cU;
++                        fuseSeq[2].value = 0x00000000U;
++                        fuseSeq[2].name  = "OPT_GEN23";
++
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: FUSE_OVR begin ovr=0x%08x EN=0x%08x "
++                                  "GEN3=0x%08x GEN23=0x%08x\n",
++                                  fuseOvr,
++                                  GPU_REG_RD32(pGpu, 0x00820040U),
++                                  GPU_REG_RD32(pGpu, 0x00820580U),
++                                  GPU_REG_RD32(pGpu, 0x0082057cU));
++
++                        for (fi = 0; fi < 3; fi++)
++                        {
++                            NvBool fwrote = NV_FALSE;
++
++                            for (xattempt = 0; xattempt < 2 && !fwrote; xattempt++)
++                            {
++                                NvU32 frd;
++
++                                GPU_REG_WR32(pGpu, 0x001fa824U, wpr2Lo);
++                                GPU_REG_WR32(pGpu, 0x001fa828U, wpr2Hi);
++
++                                xpStatus = kgspSec2PostblTimingRefillPayload(pGpu, pKernelGsp,
++                                    fuseSeq[fi].addr, fuseSeq[fi].value);
++                                if (xpStatus != NV_OK)
++                                    continue;
++
++                                xpStatus = kgspExecuteBooterLoad_HAL(pGpu, pKernelGsp,
++                                    memdescGetPhysAddr(pKernelGsp->pWprMetaDescriptor, AT_GPU, 0));
++
++                                frd = GPU_REG_RD32(pGpu, fuseSeq[fi].addr);
++                                NV_PRINTF(LEVEL_ERROR,
++                                          "SEC2_DEBUG: FUSE_OVR %s(0x%06x)=0x%08x attempt=%u "
++                                          "status=0x%x rd=0x%08x\n",
++                                          fuseSeq[fi].name, fuseSeq[fi].addr,
++                                          fuseSeq[fi].value, xattempt, xpStatus, frd);
++                                if (frd == fuseSeq[fi].value)
++                                    fwrote = NV_TRUE;
++                            }
++                            if (!fwrote)
++                                NV_PRINTF(LEVEL_ERROR,
++                                          "SEC2_DEBUG: FUSE_OVR FAILED to set %s\n",
++                                          fuseSeq[fi].name);
++                        }
++
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: FUSE_OVR end EN=0x%08x GEN3=0x%08x GEN23=0x%08x "
++                                  "CAP=0x%08x CAP2=0x%08x\n",
++                                  GPU_REG_RD32(pGpu, 0x00820040U),
++                                  GPU_REG_RD32(pGpu, 0x00820580U),
++                                  GPU_REG_RD32(pGpu, 0x0082057cU),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                    }
 +                }
 +
 +                GPU_REG_WR32(pGpu, 0x001fa824U, wpr2Lo);
