@@ -1,5 +1,9 @@
 # 07 — Fuse-override attack (#1) & static fuse-map recon (first-pass experiment support)
 
+> **Superseded — see [doc 00](00-current-state.md) for current state.**
+> **Q1 is answered: `EN_SW_OVERRIDE` (`0x820040`) IS a writable, persistent register.** It did not open the fuse route -- the OPT bank turned out to be master-gated, not privilege-gated ([doc 21](21-app08-opt-magic.md)).
+
+
 > **Supporting information for the first on-card experimentation pass on the CMP 170HX (GA100).** Deep
 > dive on avenue **#1** from [doc 06](06-pcie-gen-attack-avenues.md), the card-less static analysis
 > already run against the VBIOS, and the targeted on-card recon it pre-stages. Read doc 06 first for

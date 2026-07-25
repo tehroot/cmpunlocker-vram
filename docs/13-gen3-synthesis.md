@@ -1,5 +1,9 @@
 # 13 — Gen3 attack synthesis (7-agent forensic + theorycraft)
 
+> **Superseded — see [doc 00](00-current-state.md) for current state.**
+> Synthesis superseded by the A100 reference diff ([doc 19](19-a100-reference-diff.md)) and doc 00.
+
+
 > **[CORRECTED — see [doc 18](18-pri-mapping-and-the-advertise-path.md)]** Any claim below that
 > `0x14118f78` (or the `0x14xxxxxx` range generally) is a reset-latched strap beyond the 16 MB BAR0
 > aperture and out of software reach is **wrong**. Falcon addresses are PRI addresses:

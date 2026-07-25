@@ -1,5 +1,9 @@
 # 08 — VBIOS MAC, CFG1 strap table & full fuse map (external analysis)
 
+> **Superseded — see [doc 00](00-current-state.md) for current state.**
+> The external fuse map's `OPT_GEN23`/`OPT_GEN3` naming is confirmed on live silicon. Its claim that `EN_SW_OVERRIDE` is inert is **wrong** -- it is writable and persistent.
+
+
 > **Integrates an external GA100 VBIOS reverse-engineering analysis**
 > ([JRex286 gist](https://gist.github.com/JRex286/84cd3921788d2ffbc1e9bf8b6f2c9396); contributors Petri
 > Krohn — ECB cryptanalysis, Cab — license-region/padding). It is far deeper on the *VBIOS/firmware*

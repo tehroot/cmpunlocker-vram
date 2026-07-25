@@ -1,5 +1,9 @@
 # 09 — On-hardware PCIe-gen unlock attempt (beta branch) — measured result
 
+> **Superseded — see [doc 00](00-current-state.md) for current state.**
+> Superseded: the override-enable chain was later tested in full. `EN_SW_OVERRIDE` sets; `OPT_*` writes still refuse, for reasons unrelated to the override enable.
+
+
 > Analysis of a real boot log (`message.txt`) from a **beta cmpunlocker branch** that extends the unlock
 > to PCIe gen, on **2× CMP 170HX** (`10de:20c2`) on a HiveOS / dual-EPYC rig, patched nvidia-open
 > 610.43.03. This is the first **on-hardware** test of the PCIe-gen path, and it confirms the fuse model

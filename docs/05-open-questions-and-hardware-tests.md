@@ -1,5 +1,9 @@
 # 05 — Open questions and hardware tests
 
+> **Superseded — see [doc 00](00-current-state.md) for current state.**
+> The open questions here are answered. `EN_SW_OVERRIDE` is writable; the gen fuses are identified; the hardware tests were run.
+
+
 What static analysis + community research could **not** settle, and the concrete on-card experiments
 to run when the 170HX arrives. Ordered by value / decisiveness.
 

@@ -1,5 +1,9 @@
 # 06 — PCIe-gen attack avenues (first-pass experiment plan)
 
+> **Superseded — see [doc 00](00-current-state.md) for current state.**
+> Every avenue listed was tested. See the closed-routes table in doc 00.
+
+
 > **Supporting information for the first on-card experimentation pass on the CMP 170HX (GA100), to run
 > when the physical card arrives.** Extends [doc 05](05-open-questions-and-hardware-tests.md); assumes
 > cmpunlocker installed. This is the strategic map; the deep dive on avenue #1 and the static recon

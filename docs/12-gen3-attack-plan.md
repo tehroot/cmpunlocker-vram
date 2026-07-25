@@ -1,5 +1,9 @@
 # 12 — Gen3 attack plan (synthesis of the 5-agent theorycraft)
 
+> **Superseded — see [doc 00](00-current-state.md) for current state.**
+> Plan superseded by measurement. Most avenues here are closed; see doc 00.
+
+
 > **[CORRECTED — see [doc 18](18-pri-mapping-and-the-advertise-path.md)]** Any claim below that
 > `0x14118f78` (or the `0x14xxxxxx` range generally) is a reset-latched strap beyond the 16 MB BAR0
 > aperture and out of software reach is **wrong**. Falcon addresses are PRI addresses:

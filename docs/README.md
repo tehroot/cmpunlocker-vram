@@ -1,11 +1,22 @@
 # CMP 170HX / cmpunlocker — Investigation Documentation
 
-Comprehensive record of the reverse-engineering session on the NVIDIA CMP 170HX (GA100),
-the `cmpunlocker-vram` tool, and the PCIe-generation lock question.
+Record of the reverse-engineering work on the NVIDIA CMP 170HX (GA100), the
+`cmpunlocker-vram` tool, and the PCIe-generation lock question.
+
+## Start here
+
+**[`00-current-state.md`](00-current-state.md)** — what works, what the crippling
+is as measured against a live A100, every closed route, what remains open, and
+the method notes that each cost a wrong conclusion.
+
+The numbered docs below are the record of *how* those conclusions were reached.
+Several carry superseded claims and are banner-marked; where any of them
+disagrees with doc 00, doc 00 wins.
 
 ## Documents
 | File | Contents |
 |---|---|
+| [`00-current-state.md`](00-current-state.md) | **Single source of truth.** Current state, closed/open routes, capabilities, tooling, method notes |
 | [`01-cmpunlocker-and-unlock-mechanism.md`](01-cmpunlocker-and-unlock-mechanism.md) | How the tool works: SEC2 Booter/PLM exploit, compute + memory unlock |
 | [`02-pcie-gen-investigation.md`](02-pcie-gen-investigation.md) | The full PCIe-gen investigation, the fuse question, my errors + corrections, final verdict, Gen2 reconciliation, bandwidth math |
 | [`03-firmware-reverse-engineering.md`](03-firmware-reverse-engineering.md) | Detailed firmware RE: partition map, FwSec comparison, devinit trace, app `0x08` fuse processing, register maps |
@@ -24,6 +35,9 @@ the `cmpunlocker-vram` tool, and the PCIe-generation lock question.
 | [`16-gen2-cap-reversion-fix.md`](16-gen2-cap-reversion-fix.md) | **Gen2 FIXED on AM5 (trains in 10 ms).** The doc-10 sequence failed on 9950X / Debian 13 because `LnkCap2` (`0x880A4`) reverts `0x6→0x2` between the `0007` boot block and `nv.c` device init, after which every restore write is rejected (`0x880A8` PLM-relocked, `0x8C1C0` clamped, cfg LnkCtl2 refused). **Key insight: the cap follows the *trained rate*, not the XP clamp** — `DIS_G2` clear + `MAX_RATE=2` alone provably do **not** move CAP2 (corrects doc 13). Fix = drive the upstream retrain from *inside* the window in `kernel_gsp_tu102.c`, via RM's `osPci*` abstraction (`g_os_nvoc.h:675`). Also: the `DLLLARC`-clear success-test bug in `0008`; `iomem=relaxed` required for userspace BAR0 mmap (falsifies `gen3-probe.sh`'s OcuLink attribution); `head -1` multi-GPU bugs in `retrain.sh` / `install.sh` |
 | [`17-app08-phy-asymmetry.md`](17-app08-phy-asymmetry.md) | **`app08` PHY programming, 170HX vs A100** + a working Falcon CFG. 170HX `app08` references **76 PHY-space registers the A100 build never touches** (A100-only: 1), including a per-lane block at stride `0x40` — qualifying `FWSEC_COMPARISON.md`'s "functionally identical firmware", which only covered the fuse block. The 376-instr link/PHY routine at IMEM `0xcb00` **is live** (`lcall` from `0x15a4`). **IMEM addr = file offset − `0x30`** (the `*_imem.bin` files include the 48-byte descriptor). All of it is Falcon-only, far outside the 16 MB BAR0 aperture — the structural reason every host register sweep was inert. Records two wrong conclusions and why |
 | [`18-pri-mapping-and-the-advertise-path.md`](18-pri-mapping-and-the-advertise-path.md) | **Falcon addresses are PRI addresses**: `falcon = 0x14000000 \| pri`, confirmed on silicon (8 register matches against this driver's own constants + `0x118xxx` is published `NV_PGC6_*`). So `0x14118f78` is PRI `0x118f78`, **inside** BAR0 and host R/W — overturning "out of reach" in docs 02/12/13/17. The app08 gate inputs read `[11:10]=2` ✓ and `bit30=0`; bit30 is PL0-writable and **persists across warm reboot** (AON island), yet with every precondition satisfied the routine still doesn't run — the open contradiction. `0x8872C` is a publish *trigger* (value ignored; publishes `0x6` even with `DIS_G2` set). Publish-path diff, the `0x118f78` field sweep and the fuse-block dumps, all closed. Explains doc 09's `VSEC_DEVICE` mystery |
+| [`19-a100-reference-diff.md`](19-a100-reference-diff.md) | **The core result.** Live BAR0 diff against an A100-SXM4-80GB training Gen4. Confirms the gen fuses (`0x82057c`, `0x820580`) on silicon; closes `0xcb00`, the XP straps, the XVE window, XP3G and the publish path; maps the fuse array (256 rows, mirrored, no override bank). Records the volatility-mask and posted-write method fixes, and the contamination that made our own Gen2 writes look like crippling |
+| [`20-hs-execution-surface.md`](20-hs-execution-surface.md) | The SEC2 payload is a **ROP chain**, not a hardware-limited single write: uniform fill `0x4a7` (a code address, so a sled) plus canary `0xc0deca7e` re-placed per frame. `dmem.bin` + `RAW_BOOTER` give file-driven chains, validated. Booter image is encrypted, so no static gadget discovery. Corrects two overclaims |
+| [`21-app08-opt-magic.md`](21-app08-opt-magic.md) | `0x8872c` and `LnkCap2` appear in **no** ROM or ucode — firmware never publishes the advertise. `app08` writes `OPT_MAGIC` (`0x820520`) unconditionally, but our identical SEC2 write is refused: **the OPT bank is master-gated, not privilege-gated**, which is why `EN_SW_OVERRIDE`, the open PLM and `SENSE_CTRL` all failed |
 
 ## Executive summary
 
