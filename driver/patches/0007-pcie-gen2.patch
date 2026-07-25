@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,1567 @@
+@@ -4942,6 +4942,1662 @@
                        devId);
          }
  
@@ -1391,6 +1391,101 @@
 +                    }
 +                }
 +                /* ===== END GEN3_STRAP ===== */
++
++                /* ===== BEGIN XVE_PERMIT =====
++                 * Hunt the source of the LnkCap2 "permitted" mask.
++                 *
++                 * Established (docs/19): LnkCap2 = (0x2 | v) & permitted, where
++                 * v is the 4-bit field at 0x8872c and bit3 is never granted --
++                 * across all 11 values swept. The mask is fixed upstream of the
++                 * publish trigger and is not the XP straps (host-RO, and the one
++                 * writable XP reg moved nothing).
++                 *
++                 * Candidates from the A100 diff, XVE window. The first two are
++                 * the interesting ones: 0x0f is exactly the A100 supported-speeds
++                 * vector (2.5/5/8/16) and both read 0 on this part.
++                 *
++                 * Runs before the publish in GEN_EARLY, so set CmpXveCmd=0xe to
++                 * ask for Gen3 once the candidates are forced.
++                 *
++                 * 0x88718 is XVE SW_RESET and is deliberately absent. Nothing in
++                 * the 0x887xx cluster is written here.
++                 *
++                 *   CmpXvePermit  bitmask, one bit per entry (0 = off)
++                 */
++                {
++                    static const struct
++                    {
++                        NvU32       addr;
++                        NvU32       count;   /* consecutive dwords */
++                        NvU32       value;
++                        const char *name;
++                    } permits[] = {
++                        /* b0 */ { 0x00088c28U, 1, 0x0000000fU, "XVE_C28_vec0f" },
++                        /* b1 */ { 0x00088cd8U, 1, 0x0000000fU, "XVE_CD8_vec0f" },
++                        /* b2 */ { 0x00088d48U, 1, 0x00000003U, "XVE_D48"       },
++                        /* b3 */ { 0x00088ce0U, 1, 0x02100006U, "XVE_CE0"       },
++                        /* b4 */ { 0x00088ce4U, 1, 0x00000014U, "XVE_CE4"       },
++                        /* b5 */ { 0x00088d04U, 1, 0x00030001U, "XVE_D04"       },
++                        /* b6 */ { 0x00088dccU, 1, 0x8000000bU, "XVE_DCC"       },
++                        /* b7 */ { 0x00088c88U, 1, 0x00078004U, "XVE_C88"       },
++                        /* b8 */ { 0x0008890cU, 8, 0x04000400U, "XVE_lane_pre"  },
++                        /* b9 */ { 0x00088c3cU, 4, 0x30303030U, "XVE_lane_c3c"  },
++                        /* b10*/ { 0x00088bc0U, 1, 0x00001101U, "XVE_BC0"       },
++                        /* b11*/ { 0x00088bbcU, 1, 0x003ffc00U, "XVE_BBC"       },
++                        /* b12*/ { 0x00088a00U, 1, 0x00000011U, "XVE_A00"       },
++                        /* b13*/ { 0x0008889cU, 1, 0x00000037U, "XVE_89C"       },
++                        /* b14*/ { 0x00088c14U, 1, 0xc1c1000eU, "XVE_C14"       },
++                        /* b15*/ { 0x00088bb0U, 1, 0xbcc10015U, "XVE_BB0"       },
++                    };
++                    NvU32 permitMask = 0;
++                    NvU32 pi;
++
++                    (void)osReadRegistryDword(pGpu, "CmpXvePermit", &permitMask);
++
++                    if (permitMask != 0)
++                    {
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: XVE_PERMIT begin mask=0x%08x "
++                                  "CAP=0x%08x CAP2=0x%08x\n",
++                                  permitMask,
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++
++                        for (pi = 0; pi < (NvU32)(sizeof(permits) / sizeof(permits[0])); pi++)
++                        {
++                            NvU32 k;
++                            NvU32 pre0, post0;
++
++                            if ((permitMask & (1U << pi)) == 0)
++                                continue;
++
++                            pre0 = GPU_REG_RD32(pGpu, permits[pi].addr);
++                            for (k = 0; k < permits[pi].count; k++)
++                                GPU_REG_WR32(pGpu,
++                                    permits[pi].addr + (k * 4U), permits[pi].value);
++                            post0 = GPU_REG_RD32(pGpu, permits[pi].addr);
++
++                            NV_PRINTF(LEVEL_ERROR,
++                                      "SEC2_DEBUG: XVE_PERMIT b%u %s(0x%06x x%u) "
++                                      "pre=0x%08x want=0x%08x post=0x%08x %s "
++                                      "CAP=0x%08x CAP2=0x%08x\n",
++                                      pi, permits[pi].name, permits[pi].addr,
++                                      permits[pi].count, pre0, permits[pi].value,
++                                      post0,
++                                      (post0 == permits[pi].value) ? "STUCK" : "REVERTED",
++                                      GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                      GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                        }
++
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: XVE_PERMIT end CAP=0x%08x CAP2=0x%08x\n",
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                    }
++                }
++                /* ===== END XVE_PERMIT ===== */
++
 +
 +                lc2 = (lc2 & ~0x0000000FU) | tgt;
 +                lc2 = (lc2 & ~0x000F0000U) | 0x000F0000U;
