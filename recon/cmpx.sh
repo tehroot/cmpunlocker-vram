@@ -32,8 +32,12 @@ for k in ${KEYS+"${KEYS[@]}"}; do DWORDS="$DWORDS;$k"; done
 
 echo "== NVreg_RegistryDwords=\"$DWORDS\""
 
-# Record the log position so we only show this run's output.
-MARK=$(dmesg | wc -l)
+# Clear the ring buffer so only this run's output is shown. Counting lines and
+# slicing was unreliable -- the buffer wraps under the volume these probes emit
+# and the offset silently goes wrong, producing "no matching lines" on a run
+# that logged fine. History is already committed in the docs; live probe output
+# is what matters here.
+dmesg -C
 
 modprobe -r nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null || {
     echo "!! modules busy -- in use by:" >&2
@@ -46,9 +50,12 @@ modprobe nvidia NVreg_RegistryDwords="$DWORDS"
 # GSP does not bootstrap until something opens the device.
 nvidia-smi >/dev/null 2>&1 || echo "!! nvidia-smi failed (card may be wedged)"
 
-echo "== link state"
+echo "== link state (gen.max, gen.current, width.current)"
 nvidia-smi --query-gpu=pcie.link.gen.max,pcie.link.gen.current,pcie.link.width.current \
            --format=csv,noheader 2>/dev/null || echo "  unavailable"
 
 echo "== log"
-dmesg | tail -n +$((MARK + 1)) | grep -E "$GREP" | sed 's/^\[[^]]*\] //' || echo "  (no matching lines)"
+if ! dmesg | grep -E "$GREP" | sed 's/^\[[^]]*\] //'; then
+    echo "  (no matching lines -- module may lack the probe; check:"
+    echo "   strings \$(find /lib/modules/\$(uname -r) -name 'nvidia.ko*' | head -1) | grep -c SEC2_DEBUG )"
+fi
