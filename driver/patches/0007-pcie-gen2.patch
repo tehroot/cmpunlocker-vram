@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,1327 @@
+@@ -4942,6 +4942,1427 @@
                        devId);
          }
  
@@ -914,6 +914,106 @@
 +                }
 +            }
 +            /* ===== END FUSE_MACRO ===== */
++
++            /* ===== BEGIN FUSE_SENSE =====
++             * Re-sense the fuse macro with EN_SW_OVERRIDE already set, then test
++             * whether OPT_* became writable.
++             *
++             * Why this is the last register-level option (docs/19): OPT_* and
++             * STATUS_OPT_* are readouts and refuse writes; there is no CTRL_OPT
++             * bank; the fuse array is a perfect 256-row mirror with no repair or
++             * override bank; the publish path never grants bit3; the XP straps
++             * are host-RO. What IS established: EN_SW_OVERRIDE (0x820040) is
++             * writable and persists, and the fuse macro accepts writes and
++             * executes READ commands.
++             *
++             * The hypothesis this tests: OPT_* latched at power-on sense, when
++             * EN_SW_OVERRIDE was still 0, and is RO because the sense already
++             * happened -- not because it is RO in principle. Re-sensing with EN
++             * set is the only mechanism that could re-resolve it.
++             *
++             * SAFETY: CMD=2 is the fuse WRITE (burn) command -- irreversible,
++             * needs programming voltage, and is explicitly refused here. Only
++             * CMD=3 (SENSE_CTRL) is issued. FUSEWDATA is never written.
++             *
++             *   CmpFuseSense  1 = enable
++             *   CmpFuseCmd    command to issue, default 3; 2 is refused
++             */
++            {
++                NvU32 fuseSense = 0, fuseCmd = 3;
++
++                (void)osReadRegistryDword(pGpu, "CmpFuseSense", &fuseSense);
++                (void)osReadRegistryDword(pGpu, "CmpFuseCmd",   &fuseCmd);
++
++                if (fuseSense != 0 && fuseCmd == 2U)
++                {
++                    NV_PRINTF(LEVEL_ERROR,
++                              "SEC2_DEBUG: FUSE_SENSE REFUSED cmd=2 is the burn "
++                              "command; not issuing\n");
++                }
++                else if (fuseSense != 0)
++                {
++                    NvU32 ctrl0 = GPU_REG_RD32(pGpu, 0x00820000U);
++                    NvU32 spin;
++                    NvU32 st = 0;
++                    NvU32 wr23, wr3;
++
++                    NV_PRINTF(LEVEL_ERROR,
++                              "SEC2_DEBUG: FUSE_SENSE begin cmd=%u CTRL=0x%08x "
++                              "EN=0x%08x GEN23=0x%08x GEN3=0x%08x NVDEC=0x%08x "
++                              "CAP=0x%08x CAP2=0x%08x\n",
++                              fuseCmd, ctrl0,
++                              GPU_REG_RD32(pGpu, 0x00820040U),
++                              GPU_REG_RD32(pGpu, 0x0082057cU),
++                              GPU_REG_RD32(pGpu, 0x00820580U),
++                              GPU_REG_RD32(pGpu, 0x00820378U),
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++
++                    GPU_REG_WR32(pGpu, 0x00820000U,
++                                 (ctrl0 & ~0x00000003U) | (fuseCmd & 0x3U));
++
++                    for (spin = 0; spin < 100000U; spin++)
++                    {
++                        st = GPU_REG_RD32(pGpu, 0x00820000U);
++                        if (((st >> 16) & 0x1FU) == 0x4U && (st & 0x3U) == 0U)
++                            break;
++                    }
++
++                    NV_PRINTF(LEVEL_ERROR,
++                              "SEC2_DEBUG: FUSE_SENSE after CTRL=0x%08x spin=%u "
++                              "EN=0x%08x GEN23=0x%08x GEN3=0x%08x NVDEC=0x%08x "
++                              "CAP=0x%08x CAP2=0x%08x\n",
++                              st, spin,
++                              GPU_REG_RD32(pGpu, 0x00820040U),
++                              GPU_REG_RD32(pGpu, 0x0082057cU),
++                              GPU_REG_RD32(pGpu, 0x00820580U),
++                              GPU_REG_RD32(pGpu, 0x00820378U),
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++
++                    /*
++                     * Did the sense make the OPT shadow writable? Plain WR32 --
++                     * if this takes, no Booter load is even needed.
++                     */
++                    GPU_REG_WR32(pGpu, 0x0082057cU, 0x00000000U);
++                    wr23 = GPU_REG_RD32(pGpu, 0x0082057cU);
++                    GPU_REG_WR32(pGpu, 0x00820580U, 0x00000000U);
++                    wr3  = GPU_REG_RD32(pGpu, 0x00820580U);
++
++                    NV_PRINTF(LEVEL_ERROR,
++                              "SEC2_DEBUG: FUSE_SENSE optwr GEN23=0x%08x %s "
++                              "GEN3=0x%08x %s CAP=0x%08x CAP2=0x%08x\n",
++                              wr23, (wr23 == 0) ? "TOOK" : "refused",
++                              wr3,  (wr3  == 0) ? "TOOK" : "refused",
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                              GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++
++                    GPU_REG_WR32(pGpu, 0x00820000U, ctrl0);
++                }
++            }
++            /* ===== END FUSE_SENSE ===== */
++
 +
 +            /*
 +             * Feature-override shadow block dump (read-only).
