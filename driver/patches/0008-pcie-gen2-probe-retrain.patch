@@ -11,12 +11,10 @@
  
  #include <sound/core.h>             /* HDA struct snd_card */
  
-@@ -1360,6 +1364,87 @@
- #if defined(NV_UVM_ENABLE)
-     nv_uvm_resume_P2P(pUuid);
+@@ -1362,6 +1366,144 @@
  #endif
-+}
-+
+ }
+ 
 +static void
 +nv_cmp170hx_retrain_gen2(nv_state_t *nv)
 +{
@@ -25,8 +23,14 @@
 +    struct pci_dev *upstream;
 +    void __iomem *bar0;
 +    u16 gpu_ctl2, upstream_ctl2, upstream_ctl, link_status = 0;
-+    u32 cya0, link_config;
++    u16 gpu_ctl2_rb = 0, upstream_ctl2_rb = 0, prev_status = 0xffff;
++    u32 gpu_cap = 0, gpu_cap2 = 0, upstream_cap2 = 0, gpu_cap2_post = 0;
++    u32 cya0, link_config, bar0_cap, bar0_cap2, bar0_lc2, dllla_capable;
 +    int ret, attempt;
++
++#ifndef PCI_EXP_LNKCAP_DLLLARC
++#define PCI_EXP_LNKCAP_DLLLARC 0x00100000
++#endif
 +
 +    if ((gpu == NULL) ||
 +        ((gpu->device != 0x20c2) && (gpu->device != 0x2082)))
@@ -39,6 +43,15 @@
 +                      "CMP Gen2: no upstream PCIe bridge; skipping link retrain\n");
 +        return;
 +    }
++
++    (void)pcie_capability_read_dword(gpu, PCI_EXP_LNKCAP, &gpu_cap);
++    (void)pcie_capability_read_dword(gpu, PCI_EXP_LNKCAP2, &gpu_cap2);
++    (void)pcie_capability_read_dword(upstream, PCI_EXP_LNKCAP2, &upstream_cap2);
++    dllla_capable = (gpu_cap & PCI_EXP_LNKCAP_DLLLARC) ? 1U : 0U;
++    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
++                  "CMP Gen2: cfg pre  LnkCap=0x%08x LnkCap2=0x%08x up_LnkCap2=0x%08x DLLLARC=%u\n",
++                  gpu_cap, gpu_cap2, upstream_cap2, dllla_capable);
++
 +    bar0 = ioremap(pci_resource_start(gpu, 0), 0x90000);
 +    if (bar0 == NULL)
 +    {
@@ -46,14 +59,29 @@
 +                      "CMP Gen2: cannot map BAR0; skipping link retrain\n");
 +        return;
 +    }
++    bar0_cap  = readl(bar0 + 0x88084);
++    bar0_cap2 = readl(bar0 + 0x880a4);
++    bar0_lc2  = readl(bar0 + 0x880a8);
 +    cya0 = readl(bar0 + 0x8c2c0);
-+    writel(cya0 & ~(1U << 2), bar0 + 0x8c2c0);
 +    link_config = readl(bar0 + 0x8c040);
++    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
++                  "CMP Gen2: bar0 pre  CAP=0x%08x CAP2=0x%08x LC2=0x%08x CYA0=0x%08x CFG0=0x%08x PL=0x%08x\n",
++                  bar0_cap, bar0_cap2, bar0_lc2, cya0, link_config,
++                  readl(bar0 + 0x8c1c0));
++
++    writel(cya0 & ~(1U << 2), bar0 + 0x8c2c0);
 +    writel((link_config & ~0x000c0000U) | (2U << 18), bar0 + 0x8c040);
 +    writel(0x00000006U, bar0 + 0x8872c);
 +    (void)readl(bar0 + 0x8872c);
++
++    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
++                  "CMP Gen2: bar0 post CAP=0x%08x CAP2=0x%08x LC2=0x%08x CYA0=0x%08x CFG0=0x%08x\n",
++                  readl(bar0 + 0x88084), readl(bar0 + 0x880a4),
++                  readl(bar0 + 0x880a8), readl(bar0 + 0x8c2c0),
++                  readl(bar0 + 0x8c040));
 +    iounmap(bar0);
 +    msleep(50);
++
 +    ret = pcie_capability_read_word(gpu, PCI_EXP_LNKCTL2, &gpu_ctl2);
 +    if (ret)
 +        goto capability_error;
@@ -68,6 +96,13 @@
 +    ret = pcie_capability_write_word(upstream, PCI_EXP_LNKCTL2, upstream_ctl2);
 +    if (ret)
 +        goto capability_error;
++    (void)pcie_capability_read_word(gpu, PCI_EXP_LNKCTL2, &gpu_ctl2_rb);
++    (void)pcie_capability_read_word(upstream, PCI_EXP_LNKCTL2, &upstream_ctl2_rb);
++    (void)pcie_capability_read_dword(gpu, PCI_EXP_LNKCAP2, &gpu_cap2_post);
++    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
++                  "CMP Gen2: LnkCtl2 gpu want=0x%04x rb=0x%04x  up want=0x%04x rb=0x%04x  LnkCap2=0x%08x\n",
++                  gpu_ctl2, gpu_ctl2_rb, upstream_ctl2, upstream_ctl2_rb, gpu_cap2_post);
++
 +    ret = pcie_capability_read_word(upstream, PCI_EXP_LNKCTL, &upstream_ctl);
 +    if (ret)
 +        goto capability_error;
@@ -80,26 +115,48 @@
 +    {
 +        msleep(100);
 +        ret = pcie_capability_read_word(gpu, PCI_EXP_LNKSTA, &link_status);
-+        if (!ret && (link_status & PCI_EXP_LNKSTA_DLLLA) &&
-+            ((link_status & PCI_EXP_LNKSTA_CLS) >= PCI_EXP_LNKSTA_CLS_5_0GB))
++        if (ret)
 +        {
-+            NV_DEV_PRINTF(NV_DBG_INFO, nv, "CMP Gen2: PCIe link trained to Gen%u\n",
-+                          link_status & PCI_EXP_LNKSTA_CLS);
++            NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
++                          "CMP Gen2: LnkSta read failed at t=%d ms (%d)\n",
++                          (attempt + 1) * 100, ret);
++            return;
++        }
++        if (link_status != prev_status)
++        {
++            NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
++                          "CMP Gen2: t=%4d ms LnkSta=0x%04x speed=%u width=%u DLLLA=%u LT=%u\n",
++                          (attempt + 1) * 100, link_status,
++                          link_status & PCI_EXP_LNKSTA_CLS,
++                          (link_status & PCI_EXP_LNKSTA_NLW) >> 4,
++                          (link_status & PCI_EXP_LNKSTA_DLLLA) ? 1U : 0U,
++                          (link_status & PCI_EXP_LNKSTA_LT) ? 1U : 0U);
++            prev_status = link_status;
++        }
++        if (((link_status & PCI_EXP_LNKSTA_CLS) >= PCI_EXP_LNKSTA_CLS_5_0GB) &&
++            ((dllla_capable == 0U) || (link_status & PCI_EXP_LNKSTA_DLLLA)))
++        {
++            NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
++                          "CMP Gen2: PCIe link trained to Gen%u after %d ms\n",
++                          link_status & PCI_EXP_LNKSTA_CLS, (attempt + 1) * 100);
 +            return;
 +        }
 +    }
 +
++    (void)pcie_capability_read_dword(gpu, PCI_EXP_LNKCAP2, &gpu_cap2_post);
 +    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
-+                  "CMP Gen2: PCIe retrain completed without Gen2 link (status=0x%04x, ret=%d)\n",
-+                  link_status, ret);
++                  "CMP Gen2: retrain completed without Gen2 (LnkSta=0x%04x LnkCap2=0x%08x ret=%d)\n",
++                  link_status, gpu_cap2_post, ret);
 +    return;
 +capability_error:
 +    NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
 +                  "CMP Gen2: PCIe capability access failed (%d); skipping link retrain\n", ret);
- }
- 
++}
++
  /*
-@@ -1530,6 +1624,8 @@
+  * Brings up the device on the first file open. Assumes nvl->ldata_lock is held.
+  */
+@@ -1530,6 +1672,8 @@
          nv->flags |= NV_FLAG_PERSISTENT_SW_STATE;
      }
  
