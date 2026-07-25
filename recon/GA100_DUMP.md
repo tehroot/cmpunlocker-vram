@@ -113,3 +113,31 @@ is itself a result worth keeping.
 
 Both tools are strictly read-only: no register writes, no config-space writes,
 nothing that changes the card's state. Safe on hardware that isn't yours.
+
+
+## Second capture — what changed and why
+
+The first capture ([doc 19](../docs/19-a100-reference-diff.md)) covered nine 4 KB
+windows, ~36 KB of a 16 MB BAR0. Two gaps cost us afterwards:
+
+- **`0x8e000` (XP3G) was never captured.** XP3G turned out to be an override file
+  whose slot 3 mirrors a fuse, and it is the one mechanism found that defeats a
+  fuse-derived value. Slots 0-2 remain untestable because there is no reference
+  value to aim at.
+- **`0x88000`-`0x8ffff` was sampled, not covered.** `0x88c88` accepted bits 17-18
+  while refusing bit 2 in the same register, so the fuse holds down individual
+  bits scattered across the span. Sampling misses them.
+
+`--wide` now dumps 73728 bytes / 18432 lines: one contiguous `0x88000 +0x8000`
+span, plus PMC, PTIMER, the legacy fuse base, PGC6, lane-map, per-lane, the fuse
+region, FEAT, FPF, and FBPA.
+
+## Read-only, and stay that way
+
+The dumper performs no writes. **Do not run the fuse-macro or override probes on
+a rented card.** `FUSE_MACRO` drives a state machine and wedged our own card
+once, recoverable only by a cold power cycle — which on rented hardware may mean
+someone else's reboot, or a machine you cannot get back. The capture is worth an
+hour; a wedged rental is worth an argument.
+
+Everything needed offline is a read.

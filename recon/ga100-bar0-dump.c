@@ -115,15 +115,21 @@ static const struct region regions[] = {
  * and nothing else — worth taking while a rented reference part is live. */
 static const struct region wide[] = {
 	{ 0x0000000, 0x1000, "PMC" },
-	{ 0x0088000, 0x1000, "XVE full" },
-	{ 0x008c000, 0x1000, "XP full" },
-	{ 0x008e000, 0x1000, "XP3G override file" },
+	{ 0x0009000, 0x1000, "PTIMER / misc" },
+	{ 0x0021000, 0x1000, "legacy fuse base (priv-blocked on GA100)" },
+	/* One contiguous span rather than separate XVE/XP/XP3G windows. The
+	 * advertise path is scattered across it -- 0x88488, 0x8814c, 0x88150,
+	 * 0x8b980, 0x8c2c0, 0x8e000 are all touched by app08's link-setup
+	 * routine (docs/21), and 0x88c88 showed the fuse holds individual bits
+	 * rather than whole registers, so partial coverage misses things. */
+	{ 0x0088000, 0x8000, "XVE + XP + XP3G, contiguous" },
 	{ 0x0118000, 0x1000, "PGC6 / AON island" },
 	{ 0x0132000, 0x1000, "lane-map / packer full" },
 	{ 0x0137000, 0x1000, "per-lane full" },
 	{ 0x0820000, 0x1000, "fuse region full" },
-	{ 0x0021000, 0x1000, "fuse ctrl" },
-	{ 0x0009000, 0x1000, "PTIMER / misc" },
+	{ 0x0823000, 0x1000, "FEAT / feature readout" },
+	{ 0x0824000, 0x1000, "FPF fuses" },
+	{ 0x09a0000, 0x1000, "FBPA (PLM target, PHY witnesses)" },
 };
 
 static const uint16_t ga100_ids[] = {
