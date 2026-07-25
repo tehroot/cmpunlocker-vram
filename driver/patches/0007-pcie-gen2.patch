@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,445 @@
+@@ -4942,6 +4942,460 @@
                        devId);
          }
  
@@ -223,28 +223,42 @@
 +                    (void)osReadRegistryDword(pGpu, "CmpFuseOvr", &fuseOvr);
 +                    if (fuseOvr != 0)
 +                    {
-+                        struct { NvU32 addr; NvU32 value; const char *name; } fuseSeq[3];
++                        struct { NvU32 addr; NvU32 value; const char *name; } fuseSeq[4];
 +                        NvU32 fi;
 +
++                        /*
++                         * doc 07:60 -- the fuse table entry is
++                         * register = 0x00820040, bitmask = 0x00000001, "with a
++                         * redundant copy at +0x60000", i.e. 0x880040. Fuse-block
++                         * enables are commonly duplicated and only take when both
++                         * copies agree. The first attempt set 0x820040 alone: the
++                         * write stuck (0x0 -> 0x1) but both OPT shadows still
++                         * rejected, which is exactly what a half-set redundant
++                         * enable would do.
++                         */
 +                        fuseSeq[0].addr  = 0x00820040U;
 +                        fuseSeq[0].value = fuseOvr;
 +                        fuseSeq[0].name  = "EN_SW_OVERRIDE";
-+                        fuseSeq[1].addr  = 0x00820580U;
-+                        fuseSeq[1].value = 0x00000000U;
-+                        fuseSeq[1].name  = "OPT_GEN3";
-+                        fuseSeq[2].addr  = 0x0082057cU;
++                        fuseSeq[1].addr  = 0x00880040U;
++                        fuseSeq[1].value = fuseOvr;
++                        fuseSeq[1].name  = "EN_SW_OVERRIDE_COPY";
++                        fuseSeq[2].addr  = 0x00820580U;
 +                        fuseSeq[2].value = 0x00000000U;
-+                        fuseSeq[2].name  = "OPT_GEN23";
++                        fuseSeq[2].name  = "OPT_GEN3";
++                        fuseSeq[3].addr  = 0x0082057cU;
++                        fuseSeq[3].value = 0x00000000U;
++                        fuseSeq[3].name  = "OPT_GEN23";
 +
 +                        NV_PRINTF(LEVEL_ERROR,
-+                                  "SEC2_DEBUG: FUSE_OVR begin ovr=0x%08x EN=0x%08x "
++                                  "SEC2_DEBUG: FUSE_OVR begin ovr=0x%08x EN=0x%08x ENC=0x%08x "
 +                                  "GEN3=0x%08x GEN23=0x%08x\n",
 +                                  fuseOvr,
 +                                  GPU_REG_RD32(pGpu, 0x00820040U),
++                                  GPU_REG_RD32(pGpu, 0x00880040U),
 +                                  GPU_REG_RD32(pGpu, 0x00820580U),
 +                                  GPU_REG_RD32(pGpu, 0x0082057cU));
 +
-+                        for (fi = 0; fi < 3; fi++)
++                        for (fi = 0; fi < 4; fi++)
 +                        {
 +                            NvBool fwrote = NV_FALSE;
 +
@@ -279,9 +293,10 @@
 +                        }
 +
 +                        NV_PRINTF(LEVEL_ERROR,
-+                                  "SEC2_DEBUG: FUSE_OVR end EN=0x%08x GEN3=0x%08x GEN23=0x%08x "
++                                  "SEC2_DEBUG: FUSE_OVR end EN=0x%08x ENC=0x%08x GEN3=0x%08x GEN23=0x%08x "
 +                                  "CAP=0x%08x CAP2=0x%08x\n",
 +                                  GPU_REG_RD32(pGpu, 0x00820040U),
++                                  GPU_REG_RD32(pGpu, 0x00880040U),
 +                                  GPU_REG_RD32(pGpu, 0x00820580U),
 +                                  GPU_REG_RD32(pGpu, 0x0082057cU),
 +                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
