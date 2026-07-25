@@ -171,7 +171,7 @@ int main(int argc, char **argv)
 {
 	char bdf[512], path[1024];
 	unsigned ven = 0, dev = 0;
-	int fd, is_wide = 0, i;
+	int fd, is_wide = 0, want_rom = 0, i;
 	const struct region *rlist = regions;
 	size_t rcount = sizeof regions / sizeof *regions;
 
@@ -179,6 +179,8 @@ int main(int argc, char **argv)
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--wide"))
 			is_wide = 1;
+		else if (!strcmp(argv[i], "--rom"))
+			want_rom = 1;
 		else
 			snprintf(bdf, sizeof bdf, "%s", argv[i]);
 	}
@@ -218,6 +220,30 @@ int main(int argc, char **argv)
 	printf("# ga100-bar0-dump\n");
 	printf("# bdf=%s id=%04x:%04x boot0=0x%08x\n", bdf, ven, dev, rd(0));
 	printf("# read-only; diff two of these directly\n\n");
+
+	/* SXM4 modules expose no PCI expansion ROM BAR, so sysfs .../rom does not
+	 * exist. The PROM aperture in BAR0 is still readable, and reading it is
+	 * not a write. If the ROM is shadowed/disabled this yields 0xff or 0x00
+	 * fill rather than an image — check the signature and move on. */
+	if (want_rom) {
+		const uint32_t prom = 0x300000, len = 0x100000;
+		unsigned char *buf = malloc(len);
+		FILE *rf;
+
+		for (uint32_t o = 0; o < len; o += 4) {
+			uint32_t v = rd(prom + o);
+			buf[o]     = v & 0xff;
+			buf[o + 1] = (v >> 8) & 0xff;
+			buf[o + 2] = (v >> 16) & 0xff;
+			buf[o + 3] = (v >> 24) & 0xff;
+		}
+		rf = fopen("prom.bin", "wb");
+		if (rf) { fwrite(buf, 1, len, rf); fclose(rf); }
+
+		printf("# prom.bin: sig=%02x%02x %s\n", buf[0], buf[1],
+		       (buf[0] == 0x55 && buf[1] == 0xaa) ? "VALID" : "no image");
+		free(buf);
+	}
 
 	printf("=== named ===\n");
 	for (size_t i = 0; i < sizeof named / sizeof *named; i++) {
