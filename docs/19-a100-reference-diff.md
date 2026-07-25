@@ -338,3 +338,54 @@ and dump `0x820200 +0x400` via `FEAT_DUMP` in the same pass. If `0x820378`
 follows, the control bank is found and the gen mirrors are next. If `0x820c24`
 takes but `0x820378` does not, the block is independent state. If `0x820c24` is
 refused, the fuse block is locked to this primitive entirely.
+
+## The fuse surfaces, enumerated
+
+`FEAT_WR 0x820c24 = 0x1e` → `rd=0x1f`, refused, both attempts. The dump header
+also reports `FEAT_PLM=0xffffffff FEAT2=0xffffffff` — **the priv-level mask is
+wide open, so PLM is not what blocks the write.** A `PLM_SWEEP` comparing
+`0x820378` against `0x820040` would have shown nothing; dropped.
+
+The `0x820c` hypothesis is settled by a header rather than inference:
+
+```
+NV_FUSE_STATUS_OPT_DISPLAY   0x00820C04   /* R-I4R */
+```
+
+`0x820Cxx` is the `STATUS_OPT` resolved-floorsweeping bank, architecturally
+read-only. The inversion at `0x820c50` was the correct tell.
+
+| surface | status |
+|---|---|
+| `OPT_*` `0x8201xx`–`0x8207xx` | readouts; refuse writes with PLM open |
+| `STATUS_OPT_*` `0x820Cxx` | RO by architecture (header-confirmed) |
+| `CTRL_OPT_*` | absent from the `0x820800`–`0x820bff` gap |
+| `EN_SW_OVERRIDE` `0x820040` | **writable**, persists across module reload |
+| `0x21000` | priv-blocked `0xbadf1100` on both cards |
+| fuse macro `0x820000`–`0x820010` | untested |
+
+`0x820800`–`0x820bff` holds no mirrored values; `0x820b20`–`0x820b6c` is
+high-entropy per-die key material (differs between any two chips, not a
+crippling signal). `0x820624` reads `0x1f` on both parts, so it is not an
+`NVDEC_DISABLE` mirror either.
+
+### The macro block
+
+`0x820000`–`0x820010` matches the standard NVIDIA fuse-macro register file, and
+is identical on both parts as control (not values) should be:
+
+```
+0x820000 = 0xe0040000   FUSECTRL   (CMD / STATE)
+0x820004 = 0x000001fb   FUSEADDR
+0x820008 = 0xa0802007   FUSERDATA
+0x82000c = 0x00000000   FUSEWDATA
+0x820010 = 0x00020607   FUSETIME
+```
+
+Next test: `FEAT_WR 0x820004` (`FUSEADDR`, a benign address register — writing it
+disturbs no state). If it takes, the macro accepts writes and a sense/reload with
+`EN_SW_OVERRIDE=1` becomes the route to making `OPT_*` re-resolve. If it refuses,
+the whole fuse block except `0x820040` is closed to this primitive.
+
+`FUSECTRL` (`0x820000`) is deliberately not written first — it carries the
+command field and could start a sense cycle mid-boot.
