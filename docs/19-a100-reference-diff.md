@@ -778,3 +778,32 @@ entries are generic; the calibration entries are the weaker claim.
 
 Expect REVERTED, consistent with every other fuse-held table. If it takes, it is
 the first Gen3+ configuration state we can populate.
+
+### XP3G per-rate table is read-only
+
+`CmpXp3gLane=0x1` (the 16 per-lane rate entries, the generic half):
+
+```
+XP3G_LANE begin mask=0x1 e010=0x00000000 e094=0x00000000 CAP2=0x00000006
+XP3G_LANE end took=0/16 e010=0x00000000 e03c=0x00000000 CAP2=0x00000006
+```
+
+Zero of sixteen writes took, with the flushed re-read in place, so this is a
+genuine RO verdict rather than the posted-write artifact.
+
+That completes a consistent picture. Every table that is populated on the A100
+and zero here is read-only from the host:
+
+| table | |
+|---|---|
+| `0x8c498` / `0x8c49c` | XP, RO |
+| `0x8890c`..`0x88928` | XVE per-lane, RO |
+| `0x88c3c`..`0x88c48` | XVE per-lane, RO |
+| `0x8e010`..`0x8e04c` | XP3G per-rate, RO |
+
+The XP3G *override* registers (`OVR`/`VAL`) accept writes; the XP3G *data*
+tables do not. Those are different mechanisms in the same block.
+
+The calibration groups (`CmpXp3gLane=0x2` / `0x4`) were not run after this: the
+generic half being wholly RO makes the board-specific half moot, and those
+values came from an SXM4 board anyway.
