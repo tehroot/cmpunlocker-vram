@@ -24,10 +24,41 @@ arbitrary write per Booter load" ceiling that shaped every experiment in
 [doc 19](19-a100-reference-diff.md) is the length of this chain, not a property
 of the hardware.**
 
-Verification: with `IMEM = file offset − 0x30`, 8 of the 9 distinct values are
-inside the 60160-byte Booter Load image. `0xffbc` is the sole exception, so it is
-data (a DMEM pointer or constant) rather than a return address — which is what a
-real chain should look like.
+> **Correction.** An earlier version of this doc claimed the gadget addresses
+> were verified by checking that 8 of 9 fall inside the 60160-byte image. That
+> check is close to vacuous — any 16-bit value below `0xeb00` passes it — and the
+> real code region is only ~`0x8800` bytes, so `0x8e18` actually lands in zero
+> padding. The addresses are **not** verified.
+
+**The Booter image is encrypted**, so static disassembly is not available:
+
+```
+0x0000-0x8000   entropy 7.93-7.96 bits/byte   AES-encrypted
+0x8000-0x9000   entropy 4.38, 56% zeros       tail + padding
+0x9000-0xeb00   100% zeros                    padding
+dbg != prod, first difference at byte 256     signature region
+```
+
+Running `envydis -m falcon -V fuc5` at the candidate offsets produces incoherent
+output with a high unknown-instruction rate, consistent with ciphertext. The
+falcon decrypts HS ucode at load with a hardware key; that key is not reachable.
+
+What does hold up is structural, from the payload itself:
+
+```
+f754 writeValue   f758 c0deca7e   f75c 0cbd
+f76c writeAddr    f774 1fbd
+f788 10aa  f78c 815a  f790 8e18  f794 c0deca7e  f798 815a
+f7a0 c0deca7e  f7a4 1fbd  f7b0 ffbc  f7b8 582d
+f7c4 c0deca7e  f7c8 0cbd  f7d8 00000003  f7e0 1fbd
+f7f4 0ccb  f7f8 7f2f
+```
+
+`c0deca7e` occurs **four times** (`f758`, `f794`, `f7a0`, `f7c4`) — the canary
+re-placed at successive frame boundaries, which is Pry's HS stack-canary defeat.
+`(c0deca7e, 0cbd)` recurs at `f758/f75c` and `f7c4/f7c8`; `1fbd` recurs at
+`f774`, `f7a4`, `f7e0`. The chain is multi-frame with a repeating unit, and the
+repeat is visible without knowing what any gadget does.
 
 ## Two levers this exposes
 
