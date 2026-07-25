@@ -111,6 +111,20 @@ static const struct region regions[] = {
 	{ 0x0820400, 0x400,  "fuse shadows" },
 };
 
+/* --wide: full windows around everything above. Costs a few seconds of output
+ * and nothing else — worth taking while a rented reference part is live. */
+static const struct region wide[] = {
+	{ 0x0000000, 0x1000, "PMC" },
+	{ 0x0088000, 0x1000, "XVE full" },
+	{ 0x008c000, 0x1000, "XP full" },
+	{ 0x0118000, 0x1000, "PGC6 / AON island" },
+	{ 0x0132000, 0x1000, "lane-map / packer full" },
+	{ 0x0137000, 0x1000, "per-lane full" },
+	{ 0x0820000, 0x1000, "fuse region full" },
+	{ 0x0021000, 0x1000, "fuse ctrl" },
+	{ 0x0009000, 0x1000, "PTIMER / misc" },
+};
+
 static const uint16_t ga100_ids[] = {
 	0x20b0, 0x20b1, 0x20b2, 0x20b3, 0x20b5, 0x20b6, 0x20b7, 0x20b8,
 	0x20bb, 0x20bd, 0x20be, 0x20bf, 0x20c2, 0x20f0, 0x20f1, 0x20f2,
@@ -155,13 +169,25 @@ static int find_bdf(char *out, size_t n)
 
 int main(int argc, char **argv)
 {
-	char bdf[64], path[512];
+	char bdf[512], path[1024];
 	unsigned ven = 0, dev = 0;
-	int fd;
+	int fd, is_wide = 0, i;
+	const struct region *rlist = regions;
+	size_t rcount = sizeof regions / sizeof *regions;
 
-	if (argc > 1)
-		snprintf(bdf, sizeof bdf, "%s", argv[1]);
-	else if (find_bdf(bdf, sizeof bdf)) {
+	bdf[0] = 0;
+	for (i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "--wide"))
+			is_wide = 1;
+		else
+			snprintf(bdf, sizeof bdf, "%s", argv[i]);
+	}
+	if (is_wide) {
+		rlist = wide;
+		rcount = sizeof wide / sizeof *wide;
+	}
+
+	if (!bdf[0] && find_bdf(bdf, sizeof bdf)) {
 		fprintf(stderr, "no GA100-class NVIDIA device found; pass a BDF\n");
 		return 1;
 	}
@@ -225,11 +251,11 @@ int main(int argc, char **argv)
 		       rd(0x118e90) == 0x00068c00 ? "yes (0xcb00 ran)" : "no");
 	}
 
-	for (size_t i = 0; i < sizeof regions / sizeof *regions; i++) {
+	for (size_t i = 0; i < rcount; i++) {
 		printf("\n=== region 0x%07x +0x%x  %s ===\n",
-		       regions[i].base, regions[i].len, regions[i].name);
-		for (uint32_t o = 0; o < regions[i].len; o += 4) {
-			uint32_t off = regions[i].base + o;
+		       rlist[i].base, rlist[i].len, rlist[i].name);
+		for (uint32_t o = 0; o < rlist[i].len; o += 4) {
+			uint32_t off = rlist[i].base + o;
 			uint32_t v = rd(off);
 			printf("0x%07x 0x%08x%s\n", off, v, note(v));
 		}
