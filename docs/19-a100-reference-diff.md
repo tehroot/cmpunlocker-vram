@@ -458,3 +458,55 @@ one. Sweep the whole array in one run.
 
 Next: `CmpFuseCnt=2048` from row 0 to dump the array, then correlate rows against
 known `OPT_*` values to locate the bits behind `0x82057c` / `0x820580`.
+
+## The fuse array, mapped
+
+`CmpFuseCnt=1024` from row 0. The card did **not** wedge this time, so the
+earlier drop-off was not a deterministic consequence of the sweep.
+
+```
+effective rows: 504 captured
+bank pairs: 252   differing: 0   (perfect mirror)
+0x20c2: 2 hits — (row 149, bit 17) and (row 405, bit 17)
+```
+
+- `FUSEADDR` ignores **bit 0 and bit 8**. Effective row is `addr >> 1`, and rows
+  `0..255` mirror `256..511`. The real array is **256 rows × 32 bits = 8192 bits**.
+- The device-ID field `0x20c2` is at **row 149, bit 17**, which anchors the
+  array's bit numbering. `0x20b2` / `0x20f2` are absent, as they should be.
+- **The banks are a perfect mirror — no repair or override bank is in play.**
+  That was the one structural feature that could have offered a writable path
+  into the array, and it isn't there.
+
+Tooling: `recon/fuse-analyze.py`.
+
+## Where the Gen3 question actually stands
+
+Closed by evidence, not assumption:
+
+| route | status |
+|---|---|
+| `0xcb00` / `0x118f78` gate | dead — identical on a Gen4 part |
+| XP straps (`0x8c0xx`–`0x8c4xx`) | host-RO; the one writable reg moves nothing |
+| publish path `0x8872c` | bit3 never granted, any of 11 inputs |
+| `OPT_*` fuse readouts | refuse writes |
+| `STATUS_OPT_*` `0x820Cxx` | RO by architecture |
+| `CTRL_OPT_*` bank | not present |
+| fuse array repair/override bank | not present (perfect mirror) |
+| `EN_SW_OVERRIDE` `0x820040` | **writable and persistent** — but insufficient alone |
+| fuse macro `FUSECTRL`/`FUSEADDR` | **writable**; READ works |
+
+Two mechanisms remain untried:
+
+1. **`FUSECTRL` `CMD=SENSE_CTRL` with `EN_SW_OVERRIDE=1`.** The only mechanism
+   that could make `OPT_*` re-resolve rather than stay latched from power-on
+   sense. Cheap, and the macro is already proven to accept commands. Risk is a
+   hang recoverable by cold cycle.
+2. **HS code execution** (Pry's route). Everything above uses a single arbitrary
+   write per Booter load. Arbitrary code at L3 would reach the priv-blocked
+   `0x21000` region, which is the one address space we cannot touch at all.
+
+Burning fuses is not on the table: OTP, irreversible, needs programming voltage.
+Locating the gen bits in the array would be diagnostic only — and with no
+override bank, there is no mechanism to act on the location. That is why the
+array mapping stops here rather than continuing to hunt single bits.
