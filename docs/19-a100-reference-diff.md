@@ -154,3 +154,59 @@ one thing: is `0x820040` a PLM-gated register or a hard fuse — the Q1 of
   BAR0 PROM aperture (`NVGI`), the only ROM matched to a card we also have live
   registers for
 - `recon/volatile-offsets.txt` — the mask
+
+## On-card result — the straps are not the enforcement point
+
+`CmpGen3Strap=0x7f`, `CmpGen3Early=1`, `CmpXveCmd=0xe`:
+
+| bit | offset | pre | want | post | |
+|---|---|---|---|---|---|
+| 0 | `0x8c498` | `0x00000000` | `0x000f0040` | `0x00000000` | REVERTED |
+| 1 | `0x8c49c` | `0x00000000` | `0x0040a855` | `0x00000000` | REVERTED |
+| 2 | `0x8c4a0` | `0x0053c000` | `0x0053c42f` | `0x0053c000` | REVERTED |
+| 3 | `0x8c4f0` | `0x00000449` | `0x00000669` | `0x00000449` | REVERTED |
+| 4 | `0x8c2c0` | `0x068731b3` | `0x060711b2` | `0x060711b2` | **STUCK** |
+| 5 | `0x8c080` | `0x00000404` | `0x00001010` | `0x00000404` | REVERTED |
+| 6 | `0x8c140` | `0x00001818` | `0xffff00ff` | `0x00001818` | REVERTED |
+
+Six of seven are read-only from the host — writes dropped with no effect. The
+one that took (`0x8c2c0`, landing exactly on the A100 value) moved neither
+`CAP` nor `CAP2`. The XP straps are not where gen is enforced, and
+`0x8c498`/`0x8c49c` are not host-populatable.
+
+**The publish path is the enforcement point.** The final line of the run:
+
+```
+after XVE  want=0x0000000e  XVE=0x0000000e  CAP=0x00456102  CAP2=0x00000006
+```
+
+`0x8872c` accepts and reads back `0xe`, but `LnkCap2` stays `0x6`. Bit3
+(8.0 GT/s) is dropped between the trigger and the published vector. The doc 12
+model `LnkCap2 = 0x2 | value` is incomplete; it is
+
+```
+LnkCap2 = (0x2 | value) & permitted
+```
+
+with bit3 clear in `permitted`.
+
+**Confound, not yet excluded:** that run was a warm reload with `LnkCap2`
+already `0x6`. "Bit3 is masked" and "the trigger fires once per reset" both fit
+the observation. `GEN3_PUBSWEEP` (`CmpPubSweep=1`) separates them by sweeping
+`0x8872c` across 11 values in a single boot and logging `LnkCap2` after each.
+
+- `LnkCap2` tracks `0x2|v` except where bit3 is involved → trigger is live,
+  bit3 masked, and the mask is the target.
+- `LnkCap2` never moves after the first write → trigger is one-shot per reset,
+  and the sweep must be redone cold, one value per boot.
+
+## Clean 170HX baseline
+
+From the `early=0` run, pre-write, resolving the contamination warning above:
+
+```
+CAP     = 0x00456101      (max speed 1)
+CAP2    = 0x00000002      (2.5 GT/s only)
+0x8c2c0 = 0x068731b3      bits 0/13/23 vs A100 are genuine
+0x8c040 = 0x80004c00      bit19 confirmed as this patch's own Gen2 write
+```
