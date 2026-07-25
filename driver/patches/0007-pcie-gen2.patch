@@ -304,7 +304,7 @@
          {
 --- a/src/nvidia/src/kernel/gpu/gsp/arch/turing/kernel_gsp_tu102.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/arch/turing/kernel_gsp_tu102.c
-@@ -611,6 +611,57 @@
+@@ -611,6 +611,158 @@
          }
      }
  
@@ -355,6 +355,107 @@
 +                          GPU_REG_RD32(pGpu, 0x00088084U),
 +                          GPU_REG_RD32(pGpu, 0x000880a4U),
 +                          GPU_REG_RD32(pGpu, 0x000880a8U));
++
++                /*
++                 * Upstream-driven retrain, here rather than in nv.c.
++                 * CAP2 reads 0x6 in this block and 0x2 by the time nv.c
++                 * device init runs, and every write that could restore it
++                 * is rejected there (0x88xxx PLM-locked, 0x8c1c0 clamped).
++                 * The GPU side is already staged: LC2=0x2, DIS_G2 clear,
++                 * MAX_RATE=2. Only the upstream bridge's TargetLinkSpeed
++                 * and Retrain-Link bit are missing, and an endpoint cannot
++                 * retrain itself.
++                 */
++                {
++                    NvU32 dom    = gpuGetDomain(pGpu);
++                    NvU8  gpuBus = gpuGetBus(pGpu);
++                    void *upH    = NULL;
++                    NvU8  upBus = 0, upDev = 0, upFn = 0, capPtr = 0;
++                    NvU16 vend, devid;
++                    NvU32 bbus, bdev, bfn, poll;
++
++                    for (bbus = 0; (bbus < gpuBus) && (upH == NULL); bbus++)
++                    {
++                        for (bdev = 0; (bdev < 32) && (upH == NULL); bdev++)
++                        {
++                            for (bfn = 0; (bfn < 8) && (upH == NULL); bfn++)
++                            {
++                                void *h = osPciInitHandle(dom, (NvU8)bbus,
++                                              (NvU8)bdev, (NvU8)bfn,
++                                              &vend, &devid);
++                                if (h == NULL)
++                                    continue;
++                                if ((osPciReadByte(h, 0x0E) & 0x7F) != 0x01)
++                                    continue;
++                                if (osPciReadByte(h, 0x19) == gpuBus)
++                                {
++                                    upH   = h;
++                                    upBus = (NvU8)bbus;
++                                    upDev = (NvU8)bdev;
++                                    upFn  = (NvU8)bfn;
++                                }
++                            }
++                        }
++                    }
++
++                    if (upH == NULL)
++                    {
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: GEN2_LATE no upstream bridge for bus %02x\n",
++                                  gpuBus);
++                    }
++                    else
++                    {
++                        if (osPciReadWord(upH, 0x06) & 0x10)
++                        {
++                            capPtr = osPciReadByte(upH, 0x34);
++                            while ((capPtr != 0) && (capPtr != 0xFF))
++                            {
++                                if (osPciReadByte(upH, capPtr) == 0x10)
++                                    break;
++                                capPtr = osPciReadByte(upH, capPtr + 1);
++                            }
++                        }
++
++                        if ((capPtr == 0) || (capPtr == 0xFF))
++                        {
++                            NV_PRINTF(LEVEL_ERROR,
++                                      "SEC2_DEBUG: GEN2_LATE upstream %02x:%02x.%x has no PCIe cap\n",
++                                      upBus, upDev, upFn);
++                        }
++                        else
++                        {
++                            NvU16 uLc2 = osPciReadWord(upH, capPtr + 0x30);
++                            NvU16 uLc;
++                            NvU32 stat = 0;
++
++                            osPciWriteWord(upH, capPtr + 0x30,
++                                           (NvU16)((uLc2 & ~0x000FU) | 0x0002U));
++                            uLc = osPciReadWord(upH, capPtr + 0x10);
++                            osPciWriteWord(upH, capPtr + 0x10,
++                                           (NvU16)(uLc | 0x0020U));
++
++                            for (poll = 0; poll < 20; poll++)
++                            {
++                                osDelay(10);
++                                stat = GPU_REG_RD32(pGpu, 0x00088088U);
++                                if (((stat >> 16) & 0xFU) >= 2U)
++                                    break;
++                            }
++
++                            NV_PRINTF(LEVEL_ERROR,
++                                      "SEC2_DEBUG: GEN2_LATE retrain up=%02x:%02x.%x cap=0x%02x "
++                                      "lc2 0x%04x->0x%04x t=%u ms STAT=0x%08x speed=%u "
++                                      "CAP=0x%08x CAP2=0x%08x\n",
++                                      upBus, upDev, upFn, capPtr, uLc2,
++                                      osPciReadWord(upH, capPtr + 0x30),
++                                      (poll + 1) * 10, stat,
++                                      (stat >> 16) & 0xFU,
++                                      GPU_REG_RD32(pGpu, 0x00088084U),
++                                      GPU_REG_RD32(pGpu, 0x000880a4U));
++                        }
++                    }
++                }
 +            }
 +        }
 +    }
