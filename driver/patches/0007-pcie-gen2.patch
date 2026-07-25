@@ -304,7 +304,7 @@
          {
 --- a/src/nvidia/src/kernel/gpu/gsp/arch/turing/kernel_gsp_tu102.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/arch/turing/kernel_gsp_tu102.c
-@@ -611,6 +611,322 @@
+@@ -611,6 +611,361 @@
          }
      }
  
@@ -502,6 +502,23 @@
 +                                     */
 +                                    NvU32 cyaMask = 0, cya1Mask = 0, misc1Mask = 0;
 +                                    NvU32 cyaSet = 0, cya1Set = 0, misc1Clr = 0;
++                                    /*
++                                     * Direct writes to the capability registers
++                                     * themselves. 0x88xxx is writable in this window
++                                     * (0x880a8 and 0x8872c both land here), but
++                                     * 0x880a4 / 0x88084 have never been written at
++                                     * any point. docs 02/03 assumed they were fused
++                                     * hardware; that predates knowing the value moves.
++                                     *   CmpGen3Cap2Set   bits to OR into 0x880a4
++                                     *                    LnkCap2[7:1] speed vector,
++                                     *                    bit1=2.5 bit2=5.0 bit3=8.0,
++                                     *                    so 0x6 -> 0xe is set 0x8
++                                     *   CmpGen3CapSpeed  value for 0x88084[3:0]
++                                     *                    MaxLinkSpeed, 3 = 8 GT/s
++                                     */
++                                    NvU32 cap2Set = 0, capSpeed = 0;
++                                    NvU32 sCap    = GPU_REG_RD32(pGpu, 0x00088084U);
++                                    NvU32 sCap2   = GPU_REG_RD32(pGpu, 0x000880a4U);
 +
 +                                    (void)osReadRegistryDword(pGpu, "CmpGen3Cya", &cyaMask);
 +                                    (void)osReadRegistryDword(pGpu, "CmpGen3Cya1", &cya1Mask);
@@ -509,6 +526,24 @@
 +                                    (void)osReadRegistryDword(pGpu, "CmpGen3CyaSet", &cyaSet);
 +                                    (void)osReadRegistryDword(pGpu, "CmpGen3Cya1Set", &cya1Set);
 +                                    (void)osReadRegistryDword(pGpu, "CmpGen3Misc1Clr", &misc1Clr);
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3Cap2Set", &cap2Set);
++                                    (void)osReadRegistryDword(pGpu, "CmpGen3CapSpeed", &capSpeed);
++
++                                    if (cap2Set != 0)
++                                    {
++                                        GPU_REG_WR32(pGpu, 0x000880a4U, sCap2 | cap2Set);
++                                        NV_PRINTF(LEVEL_ERROR,
++                                                  "SEC2_DEBUG: GEN3_TRY cap2 0x%08x->0x%08x (set 0x%08x)\n",
++                                                  sCap2, GPU_REG_RD32(pGpu, 0x000880a4U), cap2Set);
++                                    }
++                                    if (capSpeed != 0)
++                                    {
++                                        GPU_REG_WR32(pGpu, 0x00088084U,
++                                                     (sCap & ~0x0000000FU) | (capSpeed & 0x0000000FU));
++                                        NV_PRINTF(LEVEL_ERROR,
++                                                  "SEC2_DEBUG: GEN3_TRY cap  0x%08x->0x%08x (speed %u)\n",
++                                                  sCap, GPU_REG_RD32(pGpu, 0x00088084U), capSpeed);
++                                    }
 +
 +                                    if ((cyaMask | cyaSet) != 0)
 +                                        GPU_REG_WR32(pGpu, 0x0008c2c0U,
@@ -591,6 +626,10 @@
 +                                            GPU_REG_WR32(pGpu, 0x0008c300U, sCya1);
 +                                        if ((misc1Mask | misc1Clr) != 0)
 +                                            GPU_REG_WR32(pGpu, 0x0008841cU, sMisc1);
++                                        if (cap2Set != 0)
++                                            GPU_REG_WR32(pGpu, 0x000880a4U, sCap2);
++                                        if (capSpeed != 0)
++                                            GPU_REG_WR32(pGpu, 0x00088084U, sCap);
 +                                        osPciWriteWord(upH, capPtr + 0x30, sUpLc2);
 +                                        osPciWriteWord(upH, capPtr + 0x10,
 +                                            (NvU16)(osPciReadWord(upH, capPtr + 0x10) | 0x0020U));
