@@ -633,3 +633,31 @@ future reference capture.
 Caveat worth stating up front: `STATUS` mirroring the fuse does not prove
 anything downstream consumes `STATUS` for the link-speed decision. If `STATUS`
 moves and `CAP2` does not, the override works and simply is not wired to gen.
+
+### XVE window exhausted
+
+`CmpXvePermit=0x3fc`, with the flushed re-read in place so verdicts are real:
+
+| bit | reg | result |
+|---|---|---|
+| b2 | `0x88d48` | `0 -> 0x03` STUCK |
+| b3 | `0x88ce0` | `0x02100002 -> 0x02100006` STUCK |
+| b4 | `0x88ce4` | `0x3f -> 0x14` STUCK |
+| b5 | `0x88d04` | already the A100 value |
+| b6 | `0x88dcc` | `0x80000000 -> 0x8000000b` STUCK |
+| b7 | `0x88c88` | want `0x00078004`, got `0x00078002` — **partial** |
+| b8 | `0x8890c` x8 | REVERTED (genuine) |
+| b9 | `0x88c3c` x4 | REVERTED (genuine) |
+
+`CAP2 = 0x6` throughout. Five registers took their A100 values and the advertise
+did not move, so none of them is the permitted mask.
+
+`0x88c88` is informative beyond this hunt: bits 17-18 accepted, bit 2 refused, in
+a single register. **The fuse holds down individual bits, not whole registers** —
+which is why "is this register writable" was always the wrong question.
+
+Bits 10-15 (`0xfc00`) wedged the link and were not retried; they are the weakest
+candidates in the set and cluster near live link-control state.
+
+Earlier, bits 0-1: `0x88c28` REVERTED-then-STUCK (the posted-write artifact) and
+`0x88cd8` STUCK, both holding `0x0f` persistently, neither moving `CAP2`.
