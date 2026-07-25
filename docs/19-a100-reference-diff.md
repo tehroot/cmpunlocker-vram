@@ -661,3 +661,39 @@ candidates in the set and cluster near live link-control state.
 
 Earlier, bits 0-1: `0x88c28` REVERTED-then-STUCK (the posted-write artifact) and
 `0x88cd8` STUCK, both holding `0x0f` persistently, neither moving `CAP2`.
+
+### XP3G override works — and is not the gate
+
+`CmpXp3g=1` (slot 3, `OVR=0xffffffff`, `VAL=0x00200000`):
+
+```
+XP3G_OVR begin slot=3 ovr=0xffffffff val=0x00200000 ST=0x16680000
+         OPT_MAGIC=0x16680000 PLM=0xffffffff CAP2=0x00000006
+XP3G_OVR after OVR=0xffffffff VAL=0x00200000 ST=0x16680000->0x00200000
+         STATUS MOVED  CAP2=0x00000006
+GEN_EARLY after XVE want=0x0000000e XVE=0x0000000e CAP2=0x00000006
+```
+
+**The override works.** `STATUS3` moved off the fuse value to exactly the A100's
+`0x00200000`, and held. `CAP2` did not follow, and a subsequent publish with
+`0xe` still produced `0x6`.
+
+So `XP3G_STATUS3` mirrors `OPT_MAGIC` and is fully overridable, but nothing
+downstream of it decides the advertised link speed. The caveat stated when this
+probe was written is the outcome: mirroring the fuse proved the fuse feeds it,
+not that anything reads it for gen.
+
+What is gained is a genuine capability rather than another refusal: **this is the
+first mechanism found that defeats a fuse-derived value.** Every other surface
+either refused writes or held specific bits down. If a fuse-mirrored register is
+ever identified as gating something we want, XP3G is how it gets overridden.
+
+### Limit reached with the data in hand
+
+Slots 0-2 remain untried, but their target values are unknown: `0x8e000` is in
+**neither** reference capture, so there is no A100 value to aim at. Slot 3 was
+only actionable because `STATUS3` happened to equal a fuse we *did* capture.
+
+That is the honest boundary of this line of work. Continuing it means a wider
+BAR0 capture from a reference part — `0x8e000` is now in the dumper's `--wide`
+list — rather than more guessing here.
