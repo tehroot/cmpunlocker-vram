@@ -6,6 +6,12 @@
 > **This doc went through two wrong conclusions before the tooling worked. Both are recorded in
 > §"What was wrong" so the mistakes aren't repeated.** The surviving results are below.
 
+> ## ⚠ SUPERSEDED BY ITS OWN CONTROL — read §"Three-way control" first.
+> A third GA100 ROM (`roms/283106.rom`, `10de:20bb`, an uncrippled part) matches the **170HX** on
+> every marker and the A100 ROM is the outlier. The PHY asymmetry below is **build drift between
+> VBIOS branches, not SKU differentiation.** The method, the extraction data and the CFG results
+> stand; the differentiation conclusion does not.
+
 ## Results
 
 1. **The 170HX `app08` does substantially more PHY programming than the A100's.** In the
@@ -192,6 +198,33 @@ IMEM == file that lands mid-instruction, under IMEM = file − 0x30 it lands on 
 
 The lesson for anything downstream: byte-pattern searches for call encodings in Falcon images are
 unreliable, and any address claim should be validated by whether a CFG walk closes.
+
+## Three-way control
+
+`roms/283106.rom` is `10de:20bb` — a third GA100 SKU, uncrippled, distinct from both
+`cmp170hx-bios-268495.rom` (`20c2`) and `a100-bios.rom` (`20b0`). Its FALCON UCODE TABLE sits at
+full-ROM `0xc154` = inner `0x6354` + image base `0x5E00`, the same layout as the 170HX, with app
+`0x08` desc at inner `0x267e0` (4 apps, no PMU entries). `app08` size `0x10138`, imem `0xd648`.
+
+| marker set | 170HX `20c2` | A100 `20b0` | **`20bb`** |
+|---|---|---|---|
+| per-lane block (45 regs, inside shared sub `0x3c7a`) | 45/45 | **0/45** | **45/45** |
+| gate inputs `1411823c` / `14118f78` / `140012e0` | 3/3 | 2/3 | **3/3** |
+| gated-path `0xcb00` markers (9 regs) | 9/9 | **0/9** | **9/9** |
+
+`app08` sizes: `20b0` `0xe554` < `20c2` `0xfe64` < `20bb` `0x10138`.
+
+**An uncrippled part carries the same PHY code as the 170HX.** So the asymmetry documented above is
+**version drift between VBIOS branches**, and `a100-bios.rom` is simply the oldest of the three. The
+"76 registers only in the 170HX" figure is an artifact of comparing against one old ROM.
+
+Consequences: neither `0xcb00` nor `0x3c7a` is a SKU differentiator, and neither is worth tracing
+further. Any future firmware diff on this card must use **at least two reference ROMs**, or version
+drift will be mistaken for crippling — which happened here twice.
+
+The gate itself is still real as code (`0x1411823c[11:10] == 2 && 0x14118f78[30] == 1` selects
+`0xcb00` over `0x7eea`); it is simply present on uncrippled parts too, so it does not explain the
+Gen3 difference.
 
 ## Open
 
