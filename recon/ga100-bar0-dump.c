@@ -240,8 +240,14 @@ int main(int argc, char **argv)
 		rf = fopen("prom.bin", "wb");
 		if (rf) { fwrite(buf, 1, len, rf); fclose(rf); }
 
-		printf("# prom.bin: sig=%02x%02x %s\n", buf[0], buf[1],
-		       (buf[0] == 0x55 && buf[1] == 0xaa) ? "VALID" : "no image");
+		/* Raw flash through the PROM aperture starts with the NVIDIA IFR
+		 * header ("NVGI"), not the 0x55AA PCI expansion-ROM signature —
+		 * the latter appears further in, at the start of the PCI image. */
+		printf("# prom.bin: sig=%02x%02x%02x%02x %s\n",
+		       buf[0], buf[1], buf[2], buf[3],
+		       !memcmp(buf, "NVGI", 4)               ? "VALID (IFR)" :
+		       (buf[0] == 0x55 && buf[1] == 0xaa)    ? "VALID (PCI ROM)" :
+		                                              "no image");
 		free(buf);
 	}
 
