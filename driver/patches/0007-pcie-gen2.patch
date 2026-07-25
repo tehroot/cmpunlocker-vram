@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,1033 @@
+@@ -4942,6 +4942,1129 @@
                        devId);
          }
  
@@ -934,6 +934,102 @@
 +                                  (cyaOff + 0xcU <= 0x00088740U) ? GPU_REG_RD32(pGpu, cyaOff + 0xcU) : 0U);
 +                    }
 +                }
++
++                /* ===== BEGIN GEN3_STRAP =====
++                 * Force the XP registers that differ from an uncrippled GA100
++                 * to their A100 values, BEFORE LnkCap2 is published at 0x8872c.
++                 *
++                 * Values from docs/19-a100-reference-diff.md: live BAR0 capture
++                 * of an A100-SXM4-80GB (10de:20b2, same boot0=0x170000a1)
++                 * training Gen4 x16, diffed against this card.
++                 *
++                 * Rationale: 0x82057c (OPT_GEN23) and 0x820580 (OPT_GEN3) are 0
++                 * on the A100 and 1 here -- confirmed crippling fuses. No ROM
++                 * references either address, so they are consumed as hardware
++                 * straps, and the straps land here. Every previous Gen3 attempt
++                 * wrote CAP2 while the strap was still set; if the strap gates
++                 * what CAP2 may hold, bit3 writes are dropped. Clearing first is
++                 * the untested step.
++                 *
++                 * ONLY offsets 0007 does not otherwise write are included.
++                 * 0x8c040 and 0x8c1c0 are deliberately absent -- their deltas
++                 * against the A100 are this patch's own Gen2 writes, not the
++                 * crippling.
++                 *
++                 * CmpGen3Strap is a bitmask, one bit per entry, so entries can
++                 * be bisected on-card without a rebuild. 0 (default) = inert.
++                 */
++                {
++                    static const struct
++                    {
++                        NvU32       addr;
++                        NvU32       mask;
++                        NvU32       value;
++                        const char *name;
++                    } straps[] = {
++                        /* bit0 */ { 0x0008c498U, 0xFFFFFFFFU, 0x000F0040U, "XP_498_zeroed"  },
++                        /* bit1 */ { 0x0008c49cU, 0xFFFFFFFFU, 0x0040A855U, "XP_49C_zeroed"  },
++                        /* bit2 */ { 0x0008c4a0U, 0x000007FFU, 0x0000042FU, "XP_4A0_low11"   },
++                        /* bit3 */ { 0x0008c4f0U, 0x00000220U, 0x00000220U, "XP_4F0_b5_b9"   },
++                        /* bit4 */ { 0x0008c2c0U, 0x00802001U, 0x00000000U, "XP_CYA0_b0_13_23" },
++                        /* bit5 */ { 0x0008c080U, 0xFFFFFFFFU, 0x00001010U, "XP_080"         },
++                        /* bit6 */ { 0x0008c140U, 0xFFFFFFFFU, 0xFFFF00FFU, "XP_140"         },
++                    };
++                    NvU32 strapMask = 0;
++                    NvU32 si;
++
++                    (void)osReadRegistryDword(pGpu, "CmpGen3Strap", &strapMask);
++
++                    if (strapMask != 0)
++                    {
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: GEN3_STRAP begin mask=0x%08x "
++                                  "GEN23=0x%08x GEN3=0x%08x CAP=0x%08x CAP2=0x%08x\n",
++                                  strapMask,
++                                  GPU_REG_RD32(pGpu, 0x0082057cU),
++                                  GPU_REG_RD32(pGpu, 0x00820580U),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++
++                        for (si = 0; si < (NvU32)(sizeof(straps) / sizeof(straps[0])); si++)
++                        {
++                            NvU32 pre;
++                            NvU32 want;
++                            NvU32 post;
++
++                            if ((strapMask & (1U << si)) == 0)
++                                continue;
++
++                            pre  = GPU_REG_RD32(pGpu, straps[si].addr);
++                            want = (pre & ~straps[si].mask) |
++                                   (straps[si].value & straps[si].mask);
++
++                            GPU_REG_WR32(pGpu, straps[si].addr, want);
++                            post = GPU_REG_RD32(pGpu, straps[si].addr);
++
++                            /*
++                             * post != want means the field is RO or re-asserted
++                             * by the strap -- that is itself the result, and
++                             * identifies which bit the fuse actually enforces.
++                             */
++                            NV_PRINTF(LEVEL_ERROR,
++                                      "SEC2_DEBUG: GEN3_STRAP b%u %s(0x%06x) "
++                                      "pre=0x%08x want=0x%08x post=0x%08x %s "
++                                      "CAP=0x%08x CAP2=0x%08x\n",
++                                      si, straps[si].name, straps[si].addr,
++                                      pre, want, post,
++                                      (post == want) ? "STUCK" : "REVERTED",
++                                      GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                      GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                        }
++
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: GEN3_STRAP end CAP=0x%08x CAP2=0x%08x\n",
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                    }
++                }
++                /* ===== END GEN3_STRAP ===== */
 +
 +                lc2 = (lc2 & ~0x0000000FU) | tgt;
 +                lc2 = (lc2 & ~0x000F0000U) | 0x000F0000U;

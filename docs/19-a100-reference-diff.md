@@ -80,20 +80,30 @@ by hardware straps rather than ucode.
 The straps land in XP registers **that are already known-writable** — `0007`
 writes `0x8c2c0` and `0x8c040` today in the Gen2 path:
 
-| offset | A100 | 170HX | delta |
-|---|---|---|---|
-| `0x8c040` | `0x80004c00` | `0x80084c00` | bit19 |
-| `0x8c2c0` | `0x060711b2` | `0x068731b3` | bits 0, 13, 23 |
-| `0x8c1c0` | `0x00040036` | `0x00220036` | bit18 clear→set 17,21 |
-| `0x8c080` | `0x00001010` | `0x00000404` | |
-| `0x8c140` | `0xffff00ff` | `0x00001818` | |
-| `0x8c498` | `0x000f0040` | `0x00000000` | **zeroed on 170HX** |
-| `0x8c49c` | `0x0040a855` | `0x00000000` | **zeroed on 170HX** |
-| `0x8c4a0` | `0x0053c42f` | `0x0053c000` | low 11 bits |
-| `0x8c4f0` | `0x00000669` | `0x00000449` | bits 5, 9 |
+> **Contamination warning.** `170hx-wide.txt` was captured with the Gen2 patch
+> active. `0007` writes `0x8c040` (bits[19:18] = rate), `0x8c1c0`
+> (`PL_LINK_RATE_VALUE`), `0x8c2c0` bit2, `0x880a8`, and publishes via
+> `0x8872c`. Deltas at those offsets are **our own writes**, not the crippling —
+> `0x8c040` bit19 in particular is the Gen2 rate we set, and reads 0 on the A100
+> only because the A100 was never patched. A clean baseline requires a 170HX
+> capture under the **stock** driver.
 
-`0x068731b3 & ~0x00802001 == 0x060711b2` exactly. The XP delta is a small,
-enumerable set — not a wall.
+| offset | A100 | 170HX | delta | ours? |
+|---|---|---|---|---|
+| `0x8c040` | `0x80004c00` | `0x80084c00` | bit19 | **yes** |
+| `0x8c1c0` | `0x00040036` | `0x00220036` | bits 17,18,21 | **yes** |
+| `0x8c2c0` | `0x060711b2` | `0x068731b3` | bits 0, 13, 23 | bit2 only |
+| `0x8c080` | `0x00001010` | `0x00000404` | | no |
+| `0x8c140` | `0xffff00ff` | `0x00001818` | | no |
+| `0x8c498` | `0x000f0040` | `0x00000000` | **zeroed on 170HX** | no |
+| `0x8c49c` | `0x0040a855` | `0x00000000` | **zeroed on 170HX** | no |
+| `0x8c4a0` | `0x0053c42f` | `0x0053c000` | low 11 bits | no |
+| `0x8c4f0` | `0x00000669` | `0x00000449` | bits 5, 9 | no |
+
+The uncontaminated set is `0x8c080`, `0x8c140`, `0x8c498`, `0x8c49c`, `0x8c4a0`,
+`0x8c4f0`, and `0x8c2c0` bits 0/13/23. `0x068731b3 & ~0x00802001 == 0x060711b2`
+exactly, and bit2 (the one `0007` clears) reads 0 on both, so those three bits
+are genuine.
 
 `0x8c498` / `0x8c49c` being fully zero on the 170HX and populated on the A100
 reads as an equalization/preset table that is never filled on the crippled part.
