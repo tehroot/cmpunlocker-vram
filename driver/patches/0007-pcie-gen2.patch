@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,647 @@
+@@ -4942,6 +4942,713 @@
                        devId);
          }
  
@@ -473,6 +473,72 @@
 +                          mbCmd, mbD1, mbD2, mbD3, mbD4);
 +            }
 +            /* ===== END SMBPBI PROBE (read-only) ===== */
++
++            /*
++             * Feature-override shadow block dump (read-only).
++             *
++             * Pry, "A Canary in the Crypto Mine" 2.1: "For each commercial axis
++             * there is a corresponding feature-override shadow register: a
++             * writable register that, when its priv-level mask permits,
++             * overrides the fused cap. SM math rate, framebuffer geometry and
++             * strap selection, and a PCIe boot-speed (Gen3-disable) bit are all
++             * expressed this way."
++             *
++             * This is the block cmpunlocker already uses for compute --
++             * SS0 0x82381c, SS1 0x823820, FEAT PLM 0x823804, FEAT2 0x823b00,
++             * FUSE_FEATURE_OVERRIDE 0x823800 -- and it is the one address range
++             * this project has never swept. Every prior sweep was XVE 0x88xxx,
++             * XP 0x8Cxxx or fuse-OPT 0x820xxx.
++             *
++             * Same paper 6.4 / Table 1 reports Gen3 as not defeated: "no
++             * override field found; PHY calibration appears fuse-gated", with
++             * the explicit caveat that this describes the limit of that effort
++             * rather than a proven wall.
++             *
++             * Runs after the PLM table, so FEAT (0x823804) and FEAT2
++             * (0x823b00) are already open and these should read real values
++             * rather than 0xbadf1100. All-zero rows are skipped to keep the log
++             * readable. Read-only.
++             *
++             *   CmpFeatDump  1 = enable
++             *   CmpFeatBase  window base, default 0x823800, 0x400 bytes dumped
++             */
++            {
++                NvU32 featDump = 0, featBase = 0x00823800U, fa;
++
++                (void)osReadRegistryDword(pGpu, "CmpFeatDump", &featDump);
++                (void)osReadRegistryDword(pGpu, "CmpFeatBase", &featBase);
++                if (featBase == 0)
++                    featBase = 0x00823800U;
++
++                if (featDump != 0)
++                {
++                    NV_PRINTF(LEVEL_ERROR,
++                              "SEC2_DEBUG: FEAT_DUMP base=0x%06x len=0x400 "
++                              "(SS0=0x%08x SS1=0x%08x FEAT_PLM=0x%08x FEAT2=0x%08x)\n",
++                              featBase,
++                              GPU_REG_RD32(pGpu, 0x0082381cU),
++                              GPU_REG_RD32(pGpu, 0x00823820U),
++                              GPU_REG_RD32(pGpu, 0x00823804U),
++                              GPU_REG_RD32(pGpu, 0x00823b00U));
++
++                    for (fa = featBase; fa < (featBase + 0x400U); fa += 0x10U)
++                    {
++                        NvU32 v0 = GPU_REG_RD32(pGpu, fa);
++                        NvU32 v1 = GPU_REG_RD32(pGpu, fa + 0x4U);
++                        NvU32 v2 = GPU_REG_RD32(pGpu, fa + 0x8U);
++                        NvU32 v3 = GPU_REG_RD32(pGpu, fa + 0xcU);
++
++                        if ((v0 | v1 | v2 | v3) == 0U)
++                            continue;
++
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: FEAT_DUMP 0x%06x: %08x %08x %08x %08x\n",
++                                  fa, v0, v1, v2, v3);
++                    }
++                }
++            }
++            /* ===== END FEAT_DUMP (read-only) ===== */
 +
 +            {
 +                NvU32 lc2 = GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CTRL_2_ADDR);
