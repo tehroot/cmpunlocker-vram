@@ -428,3 +428,33 @@ Note the standing caveat on the earlier PLM claim: `FEAT_PLM=0xffffffff` was rea
 from the FEAT region's own mask registers, not from a mask covering `0x820378`.
 "PLM is not the blocker" is therefore weaker than stated above — it holds for the
 region the header reported, not necessarily for the OPT bank.
+
+## FUSE_MACRO first run — the array reads, and it costs a power cycle
+
+`CmpFuseRd=1 CmpFuseRow=0 CmpFuseCnt=16`:
+
+```
+FUSE_MACRO begin hostwr=1 CTRL=0xe0040000 ADDR=0x000001fc RDATA=0xa0802007 EN=0x00000001
+row 0/1  0x53557c3d      row 8/9  0xc048ce89
+row 2/3  0x23de954c      row a/b  0x00000168
+row 4/5  0xf86a33e9      row c/d  0x02010200
+row 6/7  0x86500003      row e/f  0x06090680
+```
+
+- **`hostwr=1`** — the macro takes plain `GPU_REG_WR32`, no Booter load per write.
+- **`FUSEADDR` bit0 is ignored** — `addr` and `addr+1` return the same word, so
+  the effective row is `addr >> 1`. Sweep steps by 2.
+- Reads complete immediately: `spin=2`, `CTRL` back at `0xe0040000` (idle, CMD=0).
+- `RDATA` varies per row pair, so these are real array reads, not a stale latch.
+
+**Cost:** the sweep completes and prints `end`, then GSP bootstrap fails and the
+card drops off the bus — every subsequent register read is `0xffffffff` and GSP
+retries in a loop. Recovery is a cold power cycle. The failure is after the reads,
+not during them, so one large sweep costs the same single power cycle as a small
+one. Sweep the whole array in one run.
+
+`FUSEADDR` powered up at `0x1fb`, so the array is roughly `0x200` addresses =
+~256 distinct rows.
+
+Next: `CmpFuseCnt=2048` from row 0 to dump the array, then correlate rows against
+known `OPT_*` values to locate the bits behind `0x82057c` / `0x820580`.

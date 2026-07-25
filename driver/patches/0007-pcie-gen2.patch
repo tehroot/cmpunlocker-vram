@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,1316 @@
+@@ -4942,6 +4942,1327 @@
                        devId);
          }
  
@@ -824,9 +824,20 @@
 +             * it does, rows can be swept in a loop instead of costing a Booter
 +             * load per write, which is what makes a full array dump practical.
 +             *
++             * Observed on-card: FUSEADDR bit0 is ignored -- addr and addr+1
++             * return the same word, so the effective row is addr >> 1 and the
++             * sweep steps by 2. Reads complete immediately (spin=2, CTRL back
++             * at idle).
++             *
++             * Also observed: the sweep itself succeeds, but GSP bootstrap fails
++             * afterwards and the card drops off the bus until a cold power
++             * cycle. So each run costs one power cycle regardless of how many
++             * rows it covers -- sweep the whole array in one go rather than
++             * probing incrementally.
++             *
 +             *   CmpFuseRd    1 = enable
-+             *   CmpFuseRow   first row, default 0
-+             *   CmpFuseCnt   row count, default 16 (capped at 256)
++             *   CmpFuseRow   first address, default 0
++             *   CmpFuseCnt   address count, default 16 (capped at 2048)
 +             */
 +            {
 +                NvU32 fuseRd = 0, fuseRow = 0, fuseCnt = 16;
@@ -843,7 +854,7 @@
 +                    NvU32 hostWr;
 +                    NvU32 r;
 +
-+                    if (fuseCnt == 0 || fuseCnt > 256U)
++                    if (fuseCnt == 0 || fuseCnt > 2048U)
 +                        fuseCnt = 16U;
 +
 +                    /* Is the macro writable without the SEC2 primitive? */
@@ -862,7 +873,7 @@
 +
 +                    if (hostWr != 0)
 +                    {
-+                        for (r = fuseRow; r < fuseRow + fuseCnt; r++)
++                        for (r = fuseRow; r < fuseRow + fuseCnt; r += 2U)
 +                        {
 +                            NvU32 spin;
 +                            NvU32 st = 0;
