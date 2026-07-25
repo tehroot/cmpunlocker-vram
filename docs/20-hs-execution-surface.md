@@ -85,3 +85,22 @@ legacy alias survives with its own PLM, an L3 write there may take where
 ```
 
 One `FEAT_WR`, verified by reading the Ampere-base register. No new code needed.
+
+## Legacy alias — negative
+
+`FEAT_WR 0x2157c = 0`, twice per pass, four passes (the failed Booter loads put
+GSP into its retry loop):
+
+```
+FEAT_WR begin addr=0x02157c val=0x00000000 cur=0xbadf1100
+FEAT_WR 0x02157c=0x00000000 attempt=0 status=0xffff rd=0xbadf1100
+FEAT_WR FAILED
+FEAT_DUMP 0x820570: 00000000 00000000 00000549 00000001   <- 0x82057c unchanged
+FEAT_DUMP 0x820580: 00000001 00000001 00000000 00000000   <- 0x820580 unchanged
+```
+
+The Turing-era fuse base does not provide a lower-privilege route to the Ampere
+fuse shadow. `cur=0xbadf1100` also confirms the host cannot read the alias, which
+was expected and is why the Ampere-base dump was the verification.
+
+Closed. The remaining work is the chain itself.
