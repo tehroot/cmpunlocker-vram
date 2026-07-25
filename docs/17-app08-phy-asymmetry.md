@@ -11,8 +11,10 @@
 1. **The 170HX `app08` does substantially more PHY programming than the A100's.** In the
    `0x14xxxxxx` PHY/BIF space: **76 registers referenced only by the 170HX build, 1 only by the
    A100 build.**
-2. **That code runs.** The 376-instruction link/PHY routine at IMEM `0xcb00` is called from
-   IMEM `0x15a4` (`lcall 0xcb00`). It is not orphaned.
+2. **That code runs, behind a two-bit gate.** The 376-instruction link/PHY routine at IMEM `0xcb00`
+   is called from IMEM `0x15a4`, guarded by the predicate at IMEM `0xcae2`:
+   **`0x1411823c[11:10] == 2` AND `0x14118f78[30] == 1`**. If either fails, control goes to a
+   reduced alternative at IMEM `0x7eea` instead. See §"The gate".
 3. **IMEM address = file offset − 0x30.** The extracted `*_imem.bin` files include the 48-byte
    descriptor; the loader strips it.
 4. **All of it is Falcon-only.** These addresses are far outside the 16 MB BAR0 aperture, so no
@@ -101,6 +103,39 @@ st    b32 D[$r13] $r9
 | BIF | `14088088 1408814c 14088150 14088488 1408b980 1408d110 1408e000` |
 | misc | `141c5008 141c5068 141c509c 14820520 14820684` |
 
+## The gate
+
+Caller, IMEM `0x1591`–`0x15b0`:
+
+```
+0158e: and   $r9 0x1
+01591: bra e 0x159c              ; if (0x140012e0 & 1) == 0 -> gate path
+01594: lcall 0x8034              ; else other path
+01598: lbra  0x15b0
+0159c: lcall 0xcae2              ; the predicate
+015a0: bra b8 $r10 0x0 e 0x15ac  ; result == 0 -> skip the routine
+015a4: lcall 0xcb00              ; the 376-instruction PHY routine
+015a8: lbra  0x15b0
+015ac: lcall 0x7eea              ; reduced alternative
+015b0: (join)
+```
+
+So:
+
+```
+run 0xcb00  <=>  0x1411823c[11:10] == 2  AND  0x14118f78[30] == 1
+else        ->   0x7eea
+```
+
+This is the mechanism behind Pry §6.4's "the higher-generation PHY per-rate calibration appears to be
+fuse-gated and is never run in the sequences we observed" — two strap/fuse bits, with a fallback path
+when either fails. Note `FUN_imem_0000cf7a` / `FUN_imem_0000cf7c` both perform
+`0x14118f78 &= ~(1<<30)`, clearing the very bit the gate tests.
+
+`0x14118f78` is in Falcon space, far outside the 16 MB BAR0 aperture, so the gate input cannot be set
+from the host at any privilege level. With HS program-counter control it does not need to be: `V` =
+IMEM `0xcb00` invokes the routine directly, past the gate.
+
 ## The predicate at IMEM `0xcae2` (file `0xcb12`)
 
 ```
@@ -119,9 +154,10 @@ ret
 `0x1411823c[11:10] == 2` gates whether `0x14118f78[30]` is read. `0x14118f78` is the register
 [doc 02](02-pcie-gen-investigation.md) identified as the PHY strap.
 
-Not reached by the CFG walk and no call edges into it — but only 2346 of ~23k linearly-decoded
-instructions are reachable from the entry, so "not reached" is weak evidence here, unlike the
-positive result for `0xcb00`.
+**[CORRECTED]** An earlier pass reported this predicate as unreached with no call edges. Wrong — it
+is called from IMEM `0x159c`, immediately before the guarded call to `0xcb00`. The walk had decoded
+that region under a bad alignment; a clean decode anchored at file `0x30` shows the `lcall` plainly.
+The walk needs its anchor pinned rather than chosen per-target.
 
 ## The CFG walk
 
@@ -163,12 +199,12 @@ unreliable, and any address claim should be validated by whether a CFG walk clos
    footprint plus Pry §6.4, not proven.
 2. **What it does on this part.** It runs; whether it configures the link *up* or *limits* it is
    unread. Its internal conditionals have not been traced.
-3. **Reconciling with Pry §6.4** — "the higher-generation PHY per-rate calibration appears to be
-   fuse-gated and is never run in the sequences we observed". This routine *is* run. Either it is not
-   the calibration he means, or the Gen3-specific portion is skipped inside it.
-4. **Coverage.** 2346/23k instructions reachable from the entry. The remainder is either genuinely
+3. **Gate inputs.** `0x1411823c[11:10]` and `0x14118f78[30]` are unreadable from the host, so their
+   values on this card are unknown. The gate structure is read from code, not observed.
+4. **Internal branches.** At least one further conditional inside the routine, IMEM `0xcce2`, tests
+   `0x14820684 & 7`. Untraced.
+5. **Coverage.** 2346/23k instructions reachable from the entry. The remainder is either genuinely
    unreachable, reached via paths the walk misses, or data.
-5. **Predicate inputs.** `0x1411823c[11:10]` and `0x14118f78[30]` are unreadable from the host.
 
 ## Reproduce
 
