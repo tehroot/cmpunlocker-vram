@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,791 @@
+@@ -4942,6 +4942,833 @@
                        devId);
          }
  
@@ -551,6 +551,48 @@
 +                          mbCmd, mbD1, mbD2, mbD3, mbD4);
 +            }
 +            /* ===== END SMBPBI PROBE (read-only) ===== */
++
++            /*
++             * PHY / gate registers, read-only.
++             *
++             * Falcon external addresses encode the PRI target in the top byte:
++             * falcon = 0x14000000 | pri. Confirmed against this driver's own
++             * constants -- app08 references 0x1408c2c0 (== CYA_0 0x8c2c0),
++             * 0x1408841c (== PRIV_MISC_1), 0x1408c300 (== CYA_1), 0x1408c1c0
++             * (== PL_LINK_RATE), 0x14088088 (== LINK_CTRL_STATUS), 0x14820520
++             * (== OPT_MAGIC), 0x149a0204 (FBPA) -- nine exact matches.
++             *
++             * docs 02/12/13 read 0x14118f78 literally as a BAR0 offset and
++             * concluded it was a reset-latched strap beyond the 16 MB aperture
++             * and unreachable. It is PRI 0x118f78, inside the aperture, and has
++             * never been read.
++             *
++             * app08's gate (docs/17):
++             *   run the PHY routine  <=>  0x11823c[11:10] == 2
++             *                         AND 0x118f78[30]   == 1
++             * and app08 itself clears 0x118f78 bit30 elsewhere.
++             *
++             * CmpFeatAddr / CmpFeatVal can target any of these for a Booter
++             * write once the reads show what is there.
++             */
++            NV_PRINTF(LEVEL_ERROR,
++                      "SEC2_DEBUG: PHY_GATE sel(0x11823c)=0x%08x [11:10]=%u  "
++                      "strap(0x118f78)=0x%08x bit30=%u\n",
++                      GPU_REG_RD32(pGpu, 0x0011823cU),
++                      (GPU_REG_RD32(pGpu, 0x0011823cU) >> 10) & 0x3U,
++                      GPU_REG_RD32(pGpu, 0x00118f78U),
++                      (GPU_REG_RD32(pGpu, 0x00118f78U) >> 30) & 0x1U);
++            NV_PRINTF(LEVEL_ERROR,
++                      "SEC2_DEBUG: PHY_GATE uphy e80=0x%08x e90=0x%08x bb4=0x%08x "
++                      "b90=0x%08x c50=0x%08x  lane0=0x%08x lane1=0x%08x\n",
++                      GPU_REG_RD32(pGpu, 0x00118e80U),
++                      GPU_REG_RD32(pGpu, 0x00118e90U),
++                      GPU_REG_RD32(pGpu, 0x00118bb4U),
++                      GPU_REG_RD32(pGpu, 0x00118b90U),
++                      GPU_REG_RD32(pGpu, 0x00118c50U),
++                      GPU_REG_RD32(pGpu, 0x00137678U),
++                      GPU_REG_RD32(pGpu, 0x001376f8U));
++            /* ===== END PHY_GATE PROBE (read-only) ===== */
 +
 +            /*
 +             * Feature-override shadow block dump (read-only).
