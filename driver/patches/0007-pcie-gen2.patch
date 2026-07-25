@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,993 @@
+@@ -4942,6 +4942,1033 @@
                        devId);
          }
  
@@ -625,6 +625,46 @@
 +                      GPU_REG_RD32(pGpu, 0x0013744cU),
 +                      GPU_REG_RD32(pGpu, 0x00137450U));
 +            /* ===== END PHY_GATE PROBE (read-only) ===== */
++
++            /*
++             * Lane-map register group.
++             *
++             * app08 IMEM 0x2509..0x25d1 loads bytes from DMEM 0x40..0x4a, packs
++             * them four per dword and writes 0x14132a04 / 0x14132a08 /
++             * 0x14132a10 -- i.e. PRI 0x132a04 / 0x132a08 / 0x132a10 under the
++             * mapping in docs/18.
++             *
++             * That DMEM table is the one place a SKU difference survives the
++             * three-way ROM control (docs/17). 0x1f reads as a disabled entry:
++             *
++             *   A100 20b0 / 20bb :  00 01 02 03 04 05 06 07 08  1f 02 01
++             *   170HX 20c2       :  1f 01 02 1f 1f 1f 1f 1f 1f  1f 02 01
++             *
++             * Nine populated entries on the uncrippled parts, two here. Both
++             * builds reference 0x132a04, so the code is common and only the data
++             * differs. Read the whole group to see what actually landed.
++             */
++            {
++                NvU32 la;
++                for (la = 0x00132a00U; la < 0x00132a30U; la += 0x10U)
++                    NV_PRINTF(LEVEL_ERROR,
++                              "SEC2_DEBUG: LANEMAP 0x%06x: %08x %08x %08x %08x\n",
++                              la,
++                              GPU_REG_RD32(pGpu, la),
++                              GPU_REG_RD32(pGpu, la + 0x4U),
++                              GPU_REG_RD32(pGpu, la + 0x8U),
++                              GPU_REG_RD32(pGpu, la + 0xcU));
++                NV_PRINTF(LEVEL_ERROR,
++                          "SEC2_DEBUG: LANEMAP neighbours 1321a4=%08x 1321b0=%08x "
++                          "132af4=%08x 132b00=%08x 132518=%08x 132844=%08x\n",
++                          GPU_REG_RD32(pGpu, 0x001321a4U),
++                          GPU_REG_RD32(pGpu, 0x001321b0U),
++                          GPU_REG_RD32(pGpu, 0x00132af4U),
++                          GPU_REG_RD32(pGpu, 0x00132b00U),
++                          GPU_REG_RD32(pGpu, 0x00132518U),
++                          GPU_REG_RD32(pGpu, 0x00132844U));
++            }
++            /* ===== END LANEMAP PROBE (read-only) ===== */
 +
 +            /*
 +             * 0x118f78 field sweep.
