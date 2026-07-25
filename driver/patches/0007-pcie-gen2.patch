@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,1771 @@
+@@ -4942,6 +4942,1868 @@
                        devId);
          }
  
@@ -1593,6 +1593,103 @@
 +                    }
 +                }
 +                /* ===== END XP3G_OVR ===== */
++
++                /* ===== BEGIN XP3G_LANE =====
++                 * Populate the XP3G per-lane rate + calibration table.
++                 *
++                 * Second reference capture (docs/19) showed the whole
++                 * higher-rate set is present on the A100 and zero here, while
++                 * the shared/base entries (0x8e000, 0x8e0ac, 0x8e0b0, 0x8e0b8,
++                 * 0x8e0bc, 0x8e0c0) match exactly:
++                 *
++                 *   0x8e010..0x8e04c  16 dwords  A100 = 4 (0x8e03c = 3)   here 0
++                 *   0x8e094..0x8e0a8   6 dwords  A100 populated            here 0
++                 *   0x8e0c8..0x8e0d4   4 dwords  A100 populated            here 0
++                 *
++                 * Sixteen entries of 4 in the PCIe-gen block reads as per-lane
++                 * rate = Gen4. The paired 16-bit values (0x00b8-0x00cb) are PHY
++                 * per-rate calibration coefficients. This is the concrete form
++                 * of doc 17 / Pry 6.4's "higher-generation PHY per-rate
++                 * calibration appears fuse-gated".
++                 *
++                 * CAVEAT: the calibration values come from an A100-SXM4-80GB.
++                 * Per-lane calibration is board-derived, so those numbers are
++                 * not necessarily right for this board even if the mechanism is.
++                 * The rate entries (bit0) are generic; the calibration entries
++                 * (bits 1-2) are the weaker claim. Bisect accordingly.
++                 *
++                 * Expect this to be REVERTED like the other fuse-held tables. If
++                 * it takes, that is genuinely new -- it would be the first
++                 * Gen3+ configuration state we can populate.
++                 *
++                 *   CmpXp3gLane  bitmask: b0 rates, b1 cal-A, b2 cal-B
++                 */
++                {
++                    static const struct { NvU32 addr; NvU32 value; NvU32 grp; } lanes[] = {
++                        { 0x0008e010U, 0x00000004U, 0 }, { 0x0008e014U, 0x00000004U, 0 },
++                        { 0x0008e018U, 0x00000004U, 0 }, { 0x0008e01cU, 0x00000004U, 0 },
++                        { 0x0008e020U, 0x00000004U, 0 }, { 0x0008e024U, 0x00000004U, 0 },
++                        { 0x0008e028U, 0x00000004U, 0 }, { 0x0008e02cU, 0x00000004U, 0 },
++                        { 0x0008e030U, 0x00000004U, 0 }, { 0x0008e034U, 0x00000004U, 0 },
++                        { 0x0008e038U, 0x00000004U, 0 }, { 0x0008e03cU, 0x00000003U, 0 },
++                        { 0x0008e040U, 0x00000004U, 0 }, { 0x0008e044U, 0x00000004U, 0 },
++                        { 0x0008e048U, 0x00000004U, 0 }, { 0x0008e04cU, 0x00000004U, 0 },
++                        { 0x0008e094U, 0x051f2844U, 1 }, { 0x0008e098U, 0x0002142aU, 1 },
++                        { 0x0008e09cU, 0x00ba00bdU, 1 }, { 0x0008e0a0U, 0x00ba00c0U, 1 },
++                        { 0x0008e0a4U, 0x00b900c3U, 1 }, { 0x0008e0a8U, 0x00c500b8U, 1 },
++                        { 0x0008e0c8U, 0x00b400c1U, 2 }, { 0x0008e0ccU, 0x00c200b5U, 2 },
++                        { 0x0008e0d0U, 0x00b900cbU, 2 }, { 0x0008e0d4U, 0x00bb00b8U, 2 },
++                    };
++                    NvU32 laneMask = 0;
++                    NvU32 li, fl, took = 0, tried = 0;
++
++                    (void)osReadRegistryDword(pGpu, "CmpXp3gLane", &laneMask);
++
++                    if (laneMask != 0)
++                    {
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: XP3G_LANE begin mask=0x%x "
++                                  "e010=0x%08x e094=0x%08x CAP=0x%08x CAP2=0x%08x\n",
++                                  laneMask,
++                                  GPU_REG_RD32(pGpu, 0x0008e010U),
++                                  GPU_REG_RD32(pGpu, 0x0008e094U),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++
++                        for (li = 0; li < (NvU32)(sizeof(lanes) / sizeof(lanes[0])); li++)
++                        {
++                            if ((laneMask & (1U << lanes[li].grp)) == 0)
++                                continue;
++                            GPU_REG_WR32(pGpu, lanes[li].addr, lanes[li].value);
++                            tried++;
++                        }
++
++                        for (fl = 0; fl < 32U; fl++)
++                            (void)GPU_REG_RD32(pGpu, 0x00000000U);
++
++                        for (li = 0; li < (NvU32)(sizeof(lanes) / sizeof(lanes[0])); li++)
++                        {
++                            if ((laneMask & (1U << lanes[li].grp)) == 0)
++                                continue;
++                            if (GPU_REG_RD32(pGpu, lanes[li].addr) == lanes[li].value)
++                                took++;
++                        }
++
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: XP3G_LANE end took=%u/%u "
++                                  "e010=0x%08x e03c=0x%08x e094=0x%08x e0c8=0x%08x "
++                                  "CAP=0x%08x CAP2=0x%08x\n",
++                                  took, tried,
++                                  GPU_REG_RD32(pGpu, 0x0008e010U),
++                                  GPU_REG_RD32(pGpu, 0x0008e03cU),
++                                  GPU_REG_RD32(pGpu, 0x0008e094U),
++                                  GPU_REG_RD32(pGpu, 0x0008e0c8U),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                    }
++                }
++                /* ===== END XP3G_LANE ===== */
++
 +
 +
 +

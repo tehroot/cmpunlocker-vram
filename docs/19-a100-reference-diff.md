@@ -725,3 +725,56 @@ already overridden to the A100 value with no effect on the advertise
 > `0007` suppressing `STATUS0` is unrelated to gen but is wrong — it forces a bit
 > to zero that an uncrippled part has set. Worth removing when the probe blocks
 > are cleaned up.
+
+## Second capture — the XP3G per-rate table is empty on the crippled part
+
+`--wide` now covers 18510 lines. Fresh volatility mask from both self-diffs
+(39 offsets, `recon/volatile-offsets-wide2.txt`). Differences by region:
+
+```
+261 0x0132   193 0x008b   139 0x0820   93 0x0088   48 0x0118
+ 38 0x09a0    35 0x008e    11 0x0823    9 0x008d    9 0x008c
+  3 0x0137     1 0x0824     1 0x0000
+```
+
+The newly-covered ground is `0x008b` (193), `0x09a0` (38), `0x008e` beyond the
+slots (35), `0x0823` (11), `0x0824` (1).
+
+### The find
+
+```
+0x8e010..0x8e04c   16 dwords   A100 = 4 (0x8e03c = 3)      170HX = 0
+0x8e094..0x8e0a8    6 dwords   A100 = 0x051f2844, 0x0002142a,
+                               0x00ba00bd, 0x00ba00c0,
+                               0x00b900c3, 0x00c500b8        170HX = 0
+0x8e0c8..0x8e0d4    4 dwords   A100 = 0x00b400c1, 0x00c200b5,
+                               0x00b900cb, 0x00bb00b8        170HX = 0
+```
+
+and the shared/base entries in the same block are **identical on both**:
+`0x8e000=0x4b`, `0x8e0ac`, `0x8e0b0`, `0x8e0b8=0x0f`, `0x8e0bc`, `0x8e0c0`.
+
+Sixteen entries of `4` inside the PCIe-gen block reads as per-lane rate = Gen4.
+The paired 16-bit values (`0x00b8`-`0x00cb`) are PHY per-rate calibration
+coefficients.
+
+**The entire higher-rate calibration set is zero here while the base entries
+match.** That is the concrete form of [doc 17](17-app08-phy-asymmetry.md) /
+Pry 6.4's "higher-generation PHY per-rate calibration appears fuse-gated", which
+until now was inference from a ROM footprint.
+
+Note `0x8e0b8 = 0x0000000f` on **both** parts — a speed-vector-shaped value that
+is not a differentiator. Worth recording so it is not chased later.
+
+### Probe
+
+`XP3G_LANE` (`CmpXp3gLane`, b0 rates / b1 cal-A / b2 cal-B) writes the A100
+values with a flushed re-read and reports how many took.
+
+Caveat carried into the probe: the calibration numbers are from an
+A100-SXM4-80GB and per-lane calibration is board-derived, so they are not
+necessarily correct for this board even if the mechanism is right. The rate
+entries are generic; the calibration entries are the weaker claim.
+
+Expect REVERTED, consistent with every other fuse-held table. If it takes, it is
+the first Gen3+ configuration state we can populate.
