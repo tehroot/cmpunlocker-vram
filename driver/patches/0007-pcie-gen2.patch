@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,713 @@
+@@ -4942,6 +4942,791 @@
                        devId);
          }
  
@@ -416,6 +416,84 @@
 +                                  GPU_REG_RD32(pGpu, 0x00085084U),
 +                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
 +                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                    }
++                }
++
++                /*
++                 * Feature-override shadow write, via the Booter primitive.
++                 *
++                 * The FEAT_DUMP established the live window as 0x823800..
++                 * 0x82382c (0x823830 and up read badf5040, unpopulated):
++                 *   0x823800 ffffffff  FUSE_FEATURE_OVERRIDE PLM (opened)
++                 *   0x823804 ffffffff  FEAT PLM (opened)
++                 *   0x823808 00000281
++                 *   0x82380c 00888888  nibble-per-pipe
++                 *   0x823810 002aaaaa  nibble-per-pipe, looks like fused rate
++                 *   0x823814 00000233  NV_FUSE_FEATURE_READOUT (published, RO)
++                 *   0x823818 00000000
++                 *   0x82381c 88888888  SS0, the compute override
++                 *   0x823820 00000008  SS1
++                 *   0x823824 00000001  <- lone set bit, same value as OPT_GEN3
++                 *   0x823828 00000000
++                 *   0x82382c 0000000a
++                 *
++                 * Pry 2.1 puts "a PCIe boot-speed (Gen3-disable) bit" in this
++                 * block alongside SM rate and FB geometry; 6.2 accounts for the
++                 * nibble-patterned registers as per-pipe rate codes. That
++                 * leaves 0x823808, 0x823824 and 0x82382c unaccounted, and
++                 * 0x823824 has the shape of a disable bit.
++                 *
++                 * Runs before GEN_EARLY so any change is picked up by the
++                 * 0x8872c publish. Readback plus CAP/CAP2 logged.
++                 *
++                 *   CmpFeatAddr  register to write (0 = disabled)
++                 *   CmpFeatVal   value to write (default 0)
++                 */
++                {
++                    NvU32 featAddr = 0, featVal = 0;
++
++                    (void)osReadRegistryDword(pGpu, "CmpFeatAddr", &featAddr);
++                    (void)osReadRegistryDword(pGpu, "CmpFeatVal",  &featVal);
++
++                    if (featAddr != 0)
++                    {
++                        NvBool fowrote = NV_FALSE;
++
++                        NV_PRINTF(LEVEL_ERROR,
++                                  "SEC2_DEBUG: FEAT_WR begin addr=0x%06x val=0x%08x cur=0x%08x "
++                                  "CAP=0x%08x CAP2=0x%08x\n",
++                                  featAddr, featVal, GPU_REG_RD32(pGpu, featAddr),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                  GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++
++                        for (xattempt = 0; xattempt < 2 && !fowrote; xattempt++)
++                        {
++                            NvU32 frd;
++
++                            GPU_REG_WR32(pGpu, 0x001fa824U, wpr2Lo);
++                            GPU_REG_WR32(pGpu, 0x001fa828U, wpr2Hi);
++
++                            xpStatus = kgspSec2PostblTimingRefillPayload(pGpu, pKernelGsp,
++                                featAddr, featVal);
++                            if (xpStatus != NV_OK)
++                                continue;
++
++                            xpStatus = kgspExecuteBooterLoad_HAL(pGpu, pKernelGsp,
++                                memdescGetPhysAddr(pKernelGsp->pWprMetaDescriptor, AT_GPU, 0));
++
++                            frd = GPU_REG_RD32(pGpu, featAddr);
++                            NV_PRINTF(LEVEL_ERROR,
++                                      "SEC2_DEBUG: FEAT_WR 0x%06x=0x%08x attempt=%u status=0x%x "
++                                      "rd=0x%08x CAP=0x%08x CAP2=0x%08x\n",
++                                      featAddr, featVal, xattempt, xpStatus, frd,
++                                      GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP_ADDR),
++                                      GPU_REG_RD32(pGpu, PCIE_GEN2_LINK_CAP2_ADDR));
++                            if (frd == featVal)
++                                fowrote = NV_TRUE;
++                        }
++
++                        if (!fowrote)
++                            NV_PRINTF(LEVEL_ERROR, "SEC2_DEBUG: FEAT_WR FAILED\n");
 +                    }
 +                }
 +
