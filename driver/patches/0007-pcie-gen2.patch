@@ -1,6 +1,6 @@
 --- a/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
 +++ b/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
-@@ -4942,6 +4942,833 @@
+@@ -4942,6 +4942,865 @@
                        devId);
          }
  
@@ -592,6 +592,38 @@
 +                      GPU_REG_RD32(pGpu, 0x00118c50U),
 +                      GPU_REG_RD32(pGpu, 0x00137678U),
 +                      GPU_REG_RD32(pGpu, 0x001376f8U));
++            /*
++             * Outer selector and execution witnesses.
++             *
++             * app08 caller, one level above the gate (docs/17):
++             *     and   $r9 0x1        ; [0x12e0] & 1
++             *     bra e 0x159c         ; == 0 -> predicate, then 0xcb00
++             *     lcall 0x8034         ; != 0 -> different path, gate never reached
++             * so 0x12e0[0] decides whether the gate is even consulted.
++             *
++             * Witnesses that 0xcb00 actually executed. Its first act is
++             * e90 = (e90 & ~0x320) | 0x40800, so from 0x00028400 it would
++             * leave 0x00068c00. It also writes the FBPA/UPHY group
++             * 0x9a0090/0094/0154/0210/103c and 0x13744c / 0x137450, none of
++             * which any other path touches. lane0/lane1 above are NOT
++             * witnesses for this -- they belong to sub 0x3c7a on the shared
++             * path.
++             */
++            NV_PRINTF(LEVEL_ERROR,
++                      "SEC2_DEBUG: PHY_GATE outer(0x12e0)=0x%08x bit0=%u  "
++                      "e90_expect_if_ran=0x%08x\n",
++                      GPU_REG_RD32(pGpu, 0x000012e0U),
++                      GPU_REG_RD32(pGpu, 0x000012e0U) & 1U,
++                      (GPU_REG_RD32(pGpu, 0x00118e90U) & ~0x320U) | 0x40800U);
++            NV_PRINTF(LEVEL_ERROR,
++                      "SEC2_DEBUG: PHY_GATE witness 9a0090=0x%08x 9a0094=0x%08x "
++                      "9a0154=0x%08x 9a103c=0x%08x 13744c=0x%08x 137450=0x%08x\n",
++                      GPU_REG_RD32(pGpu, 0x009a0090U),
++                      GPU_REG_RD32(pGpu, 0x009a0094U),
++                      GPU_REG_RD32(pGpu, 0x009a0154U),
++                      GPU_REG_RD32(pGpu, 0x009a103cU),
++                      GPU_REG_RD32(pGpu, 0x0013744cU),
++                      GPU_REG_RD32(pGpu, 0x00137450U));
 +            /* ===== END PHY_GATE PROBE (read-only) ===== */
 +
 +            /*
