@@ -510,3 +510,53 @@ Burning fuses is not on the table: OTP, irreversible, needs programming voltage.
 Locating the gen bits in the array would be diagnostic only — and with no
 override bank, there is no mechanism to act on the location. That is why the
 array mapping stops here rather than continuing to hunt single bits.
+
+## FUSE_SENSE — negative, and the register-level surface is exhausted
+
+```
+begin  cmd=3 CTRL=0xe0040000 EN=0x1 GEN23=0x1 GEN3=0x1 CAP2=0x6
+after  CTRL=0xe0040000 spin=0 EN=0x1 GEN23=0x1 GEN3=0x1 CAP2=0x6
+optwr  GEN23=0x00000001 refused  GEN3=0x00000001 refused  CAP2=0x00000006
+```
+
+`spin=0` does not mean the command was dropped: `CMD=1` (READ) demonstrably
+executes for us — `RDATA` tracked the row address across the whole array sweep.
+The macro accepts and runs our commands. `SENSE_CTRL` just does not re-resolve
+the OPT shadow, and the shadow does not become writable afterwards.
+
+The hypothesis was that `OPT_*` is RO because it latched at power-on sense while
+`EN_SW_OVERRIDE` was still 0. That is now disconfirmed: sensing again with `EN=1`
+changes nothing.
+
+### Status
+
+Every register-level route to Gen3 on this part has been tested and closed:
+
+| route | result |
+|---|---|
+| `0xcb00` / `0x118f78` gate | identical on a Gen4 A100 — never was the mechanism |
+| XP straps `0x8c0xx`–`0x8c4xx` | 6 of 7 host-RO; the writable one moves nothing |
+| publish path `0x8872c` | bit3 never granted across 11 inputs; ceiling is `0x6` |
+| `OPT_*` readouts | refuse writes, with and without `EN_SW_OVERRIDE` |
+| `STATUS_OPT_*` | RO by architecture |
+| `CTRL_OPT_*` bank | does not exist on this chip |
+| fuse array | 256 rows, perfect mirror, no repair/override bank |
+| `FUSECTRL` `SENSE_CTRL` | executes; does not re-resolve `OPT_*` |
+
+What was gained and is durable: `EN_SW_OVERRIDE` is a writable, persistent
+register (doc 07 Q1, answered); the fuse macro is host-writable and its READ path
+works; the array is mapped with a known bit-numbering anchor; and the crippling
+is pinned to two named fuse bits confirmed against live Gen4 silicon.
+
+### What is actually left
+
+1. **HS code execution** — [Pry's route](pry_pdf.pdf). Every result in this
+   document came from *one arbitrary write per Booter load*. Arbitrary code at L3
+   removes that constraint and reaches `0x21000`, the priv-blocked region
+   (`0xbadf1100` on both parts) that is the only address space never touched.
+2. **VBIOS cross-flash** — a different SKU's signed image. Not examined in this
+   effort; blocked by signature verification, but it is a distinct surface rather
+   than a variation on the ones closed above.
+
+Burning fuses remains off the table: OTP, irreversible, requires programming
+voltage.
