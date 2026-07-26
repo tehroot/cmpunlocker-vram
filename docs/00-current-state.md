@@ -65,6 +65,16 @@ The shared/base entries in the same blocks are **identical** on both parts
 higher-rate set is missing. This is the measured form of what
 [doc 17](17-app08-phy-asymmetry.md) and Pry §6.4 inferred from a ROM footprint.
 
+> **The XP3G rows are *never measured here*, not *held at zero by the fuse*.**
+> `0x8e09c`–`0x8e0d4` is sixteen 16-bit values, one per lane, every one distinct
+> and all inside `0x00b4`–`0x00cb`; `0x8e010`–`0x8e04c` is fifteen entries of `4`
+> and one of `3` (`0x8e03c`, lane 11). A fuse mirror does not produce sixteen
+> near-but-different values or one odd lane — a calibration pass does. So the
+> target is not "write the table" (RO, `took=0/16`, and the values are
+> board-derived anyway) but "find what runs the pass." Same reading doc 19
+> already reached for `0x8c498`: *some other initialization populates them*.
+> [doc 24](24-red-team-of-23.md) §W5.
+
 It also holds down **individual bits, not whole registers**: `0x88c88` accepted
 bits 17–18 while refusing bit 2 in the same write.
 
@@ -84,18 +94,50 @@ Clean 170HX baseline (cold boot, stock driver path): `CAP=0x00456101`,
 Neither `0x8872c` nor `LnkCap2` is referenced in **any** ROM or ucode image. The
 VBIOS never publishes the advertise; only our patch writes the trigger.
 
-### Why every software write fails
+### Why every software write fails — two live models
 
 `app08` writes `0x820520` unconditionally every boot (`st b32 D[$r15] $r9` at
-`0xcdc9`). Our SEC2 payload writes the same address and is refused.
+`0xcdc9`). Our SEC2 payload writes the same address and is refused. What follows
+from that is **not settled**; two models fit, and they imply opposite next moves.
 
-Both are privileged falcon-context writes. Only one lands. **The OPT bank is
-gated by which master issues the write — or by a window that has closed — not by
-privilege level.**
+**Model A — re-driven sense-chain output.** The `OPT_*` registers are not storage
+at all; they are continuously re-driven outputs of the fuse sense chain, so a
+write lands nowhere regardless of who issues it. Fits every observation: the
+control flops in the *same* block (`EN_SW_OVERRIDE` `0x820040`, `FUSECTRL` /
+`FUSEADDR` / `FUSEWDATA` `0x820000`–`0x820010`) are writable and persistent while
+every readout refuses; `STATUS_OPT_*` is published `R-I4R`; `SENSE_CTRL` resolves
+nothing because the array never changed; there is no `CTRL_OPT` bank for
+`EN_SW_OVERRIDE` to override *from*. Note `NV_FUSE_OPT_NVDEC_DISABLE 0x820378` is
+published `RW-4R` and still refuses, so "architecturally read-only" is *not* the
+explanation — "written, then immediately re-driven" is, and it is
+indistinguishable from a refusal under a flushed re-read.
 
-That retrospectively explains three failed approaches: `EN_SW_OVERRIDE=1`, the
-fuse-block PLM being open (`0x8200fc = 0xffffffff`, set every boot by `0001`),
-and `SENSE_CTRL` re-sensing. None addressed what was actually being checked.
+**Model B — master- or window-gated.** Both writes are privileged falcon-context
+writes and only one lands, so the accepted context differs.
+
+The PLM evidence currently **argues against B**. Field layout is published
+(`ls10/dev_falcon_v4.h`): `SOURCE_ENABLE` is bits 31:12, twenty PRI masters, and
+that field *is* the master-identity check. At capture the 170HX read `0xffffffff`
+across `0x8200d0`–`0x8200fc` — all four privilege levels for read and write, all
+twenty sources enabled — and the OPT write was still refused. Decisive only if one
+of those twelve governs `0x820520`, which nobody has established.
+
+Model B also rests on an unverified premise: that `app08`'s store *lands*. The only
+evidence is the A100 reading `OPT_MAGIC = 0x00200000`, but bit 21 is set on the
+170HX too (`0x16680000` contains it), so the fuse carrying bit 21 on both parts and
+`app08`'s store being as inert as ours explains the data equally well.
+
+**Decider — `OPT_WRSWEEP`, one boot.** Walk `0x820100`–`0x8207fc` (448 dwords):
+read, flip one bit, write, flush 32 reads through `PMC_BOOT_0`, re-read, count.
+`0/448` ⇒ model A, and there is no master to find. Any nonzero ⇒ model B, and the
+ones that stick are the map. Not yet written.
+
+Under either model, `EN_SW_OVERRIDE=1`, `SENSE_CTRL` re-sensing and the fuse-block
+PLM being open were addressing something that was never being checked — and the
+PLM one was doubly moot: `0x8200fc` already reads `0xffffffff` on the **stock**
+A100, so `0001`'s open of it has always been a no-op.
+
+Full argument: [doc 24](24-red-team-of-23.md) §W1–W3.
 
 ---
 
@@ -128,7 +170,23 @@ Each tested on-card and closed, not assumed.
    ([doc 20](20-hs-execution-surface.md)) but executes in the Booter's context —
    which is the context being refused. More capability there does not obviously
    help. It would matter only if a target is found that the Booter context *can*
-   reach.
+   reach. **Blocked upstream:** under model A there is no accepted context to
+   redirect *to*, and nobody has established which physical falcon runs
+   `app08` — the VBIOS ucode table targets it at `0x01 DEVINIT`, enumerated
+   separately from `0x05 PMU` and `0x07 GSP`, while our ROP runs on SEC2. If
+   those are different engines there is no control-flow edge to find. Settle the
+   engine offline before spending card time on gadget discovery
+   ([doc 24](24-red-team-of-23.md) §W6).
+
+3. **Measurement, then re-run `GEN3_TRY`.** `GEN3_TRY` already drives the MAC
+   rate field to 3 (`0x8c040[19:18]`, `0x8c1c0 = 0x00340036`, `LnkCtl2`) —
+   advertising Gen3 independently of `CAP2` is *tried*, not untried — but it ran
+   blind. Without `LTSSM_STATE`, "the rate request is clamped" and "it entered
+   `RECOVERY_EQZN` and fell back" are indistinguishable, and they lead to
+   different next moves. The instrument is the SMBPBI mailbox, which is at
+   **`0x200e0`** on a GPU, not the NVSwitch `0x660e0` the probe has been reading
+   ([doc 24](24-red-team-of-23.md) §D1). The probe is ungated, so its `0x660e0`
+   result is already in the `dmesg` history.
 
 Not viable: burning fuses (OTP, irreversible, needs programming voltage).
 
@@ -168,7 +226,19 @@ Each of these cost a wrong conclusion before it was understood.
   "confirmation" in doc 20.
 - **The patch's own writes look like reference differences.** `0x8c040` bit 19
   was recorded as crippling; it was our Gen2 rate write. Any 170HX capture used
-  as a baseline must come from a cold boot with probe keys unset.
+  as a baseline must come from a cold boot with probe keys unset. This has now
+  happened three times; the known-contaminated offsets are:
+
+  | offset | source | 170HX capture reads |
+  |---|---|---|
+  | `0x8c040` bit 19, `0x8c1c0`, `0x8c2c0` bit 2, `0x880a8`, `0x8872c` | `0007` Gen2 path | our values |
+  | `0x82381c`, `0x823820` | `0001` SM-speed writes | `0x88888888`, `0x00000008` |
+  | `0x823800`, `0x823804` | `0001`/`0007` PLM opens | `0xffffffff` (A100 stock: `0xffffff8f`) |
+  | `0x8200d0`..`0x8200fc` | PLM opens, or a real part difference | `0xffffffff` — **unresolved** |
+
+  The genuine `0x8238xx` deltas are `0x823808`, `0x82380c`, `0x823810`,
+  `0x823814` (published `R--4R`, a readout), `0x823828` (A100 `7` / here `0`) and
+  `0x82382c` (A100 `1` / here `0xa`). `0x823824` is `0x00000001` on **both**.
 - **In-range is not verification.** "8 of 9 gadget addresses fall inside the
   image" was near-vacuous: any 16-bit value under `0xeb00` passes.
 
@@ -179,6 +249,7 @@ Each of these cost a wrong conclusion before it was understood.
 | path | purpose |
 |---|---|
 | `recon/ga100-bar0-dump.c` | read-only BAR0 capture; `--wide` = 18510 lines; `--rom` reads the PROM aperture |
+| — | **gap:** `--wide` does not cover `0x20000` (THERM), so there is no reference value for the SMBPBI mailbox at `0x200e0`. Add `{ 0x0020000, 0x1000, "THERM" }` before the next capture |
 | `recon/kmod/` | kmod fallback where `iomem=relaxed` is unavailable |
 | `recon/dump-diff.sh` | masked diff of two captures |
 | `recon/volatile-offsets*.txt` | volatility masks |
@@ -215,6 +286,9 @@ fwsec/booter_load_ga100_prod.bin         Booter ucode (encrypted)
 - **Build / reproduce:** [04](04-toolchain-and-reproducibility.md),
   [11](11-debian-build-notes.md)
 - **Reference diff, the core result:** [19](19-a100-reference-diff.md)
+- **Proposal and its red team:** [23](23-gen3-proposal-and-red-team.md) →
+  [24](24-red-team-of-23.md) — read 24 with 23; four of 23's claims are refuted
+  from artifacts already in the repo
 - **Firmware analysis:** [17](17-app08-phy-asymmetry.md),
   [18](18-pri-mapping-and-the-advertise-path.md), [21](21-app08-opt-magic.md)
 - **HS execution:** [20](20-hs-execution-surface.md)
