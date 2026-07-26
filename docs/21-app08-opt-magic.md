@@ -139,3 +139,52 @@ Two consequences:
 Stated plainly: this closes the register-write approach rather than advancing it.
 The value is knowing *why* it was always going to fail, which was not established
 before.
+
+## devinit only reads the advertise
+
+`devinit` (app `0x01`) is the register-init table interpreter: app08 reads fuses
+and computes config into DMEM, devinit walks tables (`0x3e8`, `0xba0`, `0xc30`)
+and applies them ([doc 03](03-firmware-reverse-engineering.md)).
+
+It is the only image referencing the advertise registers. Whole-file disassembly
+(11150 lines, 75 unknowns) puts both sites precisely:
+
+`0x153f` — LnkCap getter:
+
+```
+mov  $r9 0x14088084      ; LnkCap
+ld   b32 $r9 D[$r9]
+extr $r15 $r9 0x4:0x9    ; width field
+and  $r9 0xf             ; max speed
+st   b8 D[$r10+0x1] $r15 ; -> DMEM
+st   b8 D[$r10] $r9      ; -> DMEM
+ret
+```
+
+`0x3bac` — LnkCtl2 target-speed switch:
+
+```
+mov $r9 0x140880a8       ; LnkCtl2
+ld  b32 $r9 D[$r9]
+and $r9 0xf              ; target speed
+bra ... compares 1, 2, 3, 4 ...
+```
+
+**Both are reads.** devinit queries the advertised capability and branches on it;
+it never writes `LnkCap`, `LnkCap2`, or the publish trigger.
+
+With `0x8872c` and `0x880a4` referenced in no ROM or ucode at all, and both being
+RO in `NV_PCFG_XVE_REGISTER_WR_MAP`, the conclusion is:
+
+**The advertised link capability is composed in hardware from fuses. No firmware
+anywhere writes it.**
+
+### Consequence for the VBIOS route
+
+The natural follow-on to this doc's master-gating finding was "modify the devinit
+tables so the advertise comes out different". That cannot work — there is no
+table entry for the advertise to come from.
+
+VBIOS modification could still change PHY setup or what app08 computes and writes
+(including `OPT_MAGIC`). It cannot change the advertised link capability, because
+firmware never sets it.
