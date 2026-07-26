@@ -132,10 +132,60 @@ windows, ~36 KB of a 16 MB BAR0. Two gaps cost us afterwards:
 span, plus PMC, PTIMER, the legacy fuse base, PGC6, lane-map, per-lane, the fuse
 region, FEAT, FPF, and FBPA.
 
+## Third capture — states, not snapshots
+
+Both prior captures were single post-init snapshots. That is a measurement flaw,
+not a coverage flaw, and no amount of extra address range fixes it.
+
+The register it matters most for: **`0x118f78` bit 30**, the gate input for
+app08's 376-instruction PHY routine at `0xcb00`. It reads `0` post-init on the
+170HX *and* on the A100, which is why [doc 19](../docs/19-a100-reference-diff.md)
+closed that route. But app08 contains two functions (`FUN_imem_0000cf7a`,
+`FUN_imem_0000cf7c`) that do `0x14118f78 &= ~(1<<30)` — they clear the bit the
+gate tests. So `0` afterwards and never-set are different observations, and we
+have only ever made the first.
+
+```sh
+# boot with:  iomem=relaxed modprobe.blacklist=nouveau,nvidia
+sudo recon/capture-states.sh -o caps/a100        # S0 then S1
+sudo recon/capture-states.sh -o caps/a100 --s2   # + the retrain step
+```
+
+| state | condition | isolates |
+|---|---|---|
+| S0 | nvidia + nouveau never loaded this boot | GFW boot output alone |
+| S1 | `modprobe nvidia`, `nvidia-smi` | + FWSEC-on-GSP, GSP-RM, Booter |
+| S2 | after a host-driven root-port retrain | whether the per-rate set tracks the trained rate |
+
+What the S0→S1 diff decides:
+
+```
+0x118f78 bit30   1 at S0, 0 at S1  -> 0xcb00 does run; the gate closes behind it
+                 0 at both         -> doc 19's closure stands
+
+XP3G per-rate    populated at S0   -> GFW/devinit populates it; the divergence is
+                                      inside app08's 0x7eea path
+                 empty S0, full S1 -> GSP-RM populates it at runtime, in software
+                                      that also runs on our card
+```
+
+**`rmmod` is not S0.** GSP has already run by then. S0 needs the blacklist on the
+cmdline; the script refuses rather than producing a mislabelled capture.
+
+Run the same ladder on the 170HX. It costs nothing and it tests the bit-30
+question without a rental.
+
 ## Read-only, and stay that way
 
-The dumper performs no writes. **Do not run the fuse-macro or override probes on
-a rented card.** `FUSE_MACRO` drives a state machine and wedged our own card
+The dumper performs no writes, and S0/S1 above are pure reads. **S2 is not** — it
+writes `LNKCTL2` and the retrain bit on the **upstream port**, not the GPU, and
+restores the saved value afterwards. That is the same upstream-driven mechanism
+doc 10 uses for Gen2, and it is the sanctioned way to initiate a speed change.
+The honest risk is that the link does not come back and the GPU is gone until the
+host reboots — which on a rental may not be your reboot to make. Take S0 and S1
+first, then decide whether S2 is still needed, and run it last.
+
+**Do not run the fuse-macro or override probes on a rented card.** `FUSE_MACRO` drives a state machine and wedged our own card
 once, recoverable only by a cold power cycle — which on rented hardware may mean
 someone else's reboot, or a machine you cannot get back. The capture is worth an
 hour; a wedged rental is worth an argument.

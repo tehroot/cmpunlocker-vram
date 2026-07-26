@@ -8,15 +8,27 @@
  * and does not touch the nvidia driver. Safe to run on a rented instance.
  *
  * Build:  cc -O2 -o ga100-bar0-dump ga100-bar0-dump.c
- * Run:    sudo ./ga100-bar0-dump [BDF] > a100.txt
+ * Run:    sudo ./ga100-bar0-dump [BDF] [--wide] [--rom] [--label TEXT] > out.txt
  *
  * Requires iomem=relaxed on the kernel cmdline (sysfs resource0 mmap is
  * refused by iomem_is_exclusive() otherwise). If you cannot set it, use the
  * kmod fallback in recon/kmod/.
  *
- * Run with the nvidia driver loaded and after `nvidia-smi` has run, so the
- * capture reflects post-GSP-init state — that is what the 170HX values were
- * taken under.
+ * CAPTURE IN STATES, NOT ONCE. Every capture taken before 2026-07 was a single
+ * post-init snapshot, and that is why several conclusions rest on values whose
+ * *time* was never controlled. In particular `0x118f78` bit30 (the 0xcb00 gate)
+ * reads 0 post-init on both parts — but app08 contains two functions that clear
+ * that bit, so "0 afterwards" and "never set" are not the same observation.
+ *
+ *   S0  nvidia and nouveau NOT loaded          GFW boot output alone
+ *   S1  modprobe nvidia; nvidia-smi            + FWSEC-on-GSP, GSP-RM, Booter
+ *   S2  after a host-driven link retrain       does it track the trained rate
+ *
+ * S0 needs modprobe.blacklist=nouveau,nvidia on the cmdline — an rmmod after
+ * the fact does not restore the pre-init state. Always pass --label so the
+ * three files cannot be confused later; recon/capture-states.sh does this.
+ *
+ * The 170HX captures currently in the repo are all S1.
  */
 
 #define _GNU_SOURCE
@@ -48,10 +60,22 @@ static const char *note(uint32_t v)
 struct reg { uint32_t off; const char *name; };
 
 static const struct reg named[] = {
+	/* --- phase witnesses: which boot epoch produced this capture --- */
+	{ 0x118234, "PGC6_AON_SECURE_SCRATCH_GROUP_05(0)  GFW_BOOT, PROGRESS[7:0], 0xff = COMPLETED" },
+	{ 0x11803c, "PGC6_?               (holds PRI 0x118e90 on both parts — sequencer target?)" },
+	{ 0x118038, "PGC6_?               (adjacent to the above)" },
+
 	/* --- the decisive one: gate input for the 0xcb00 path --- */
-	{ 0x118f78, "PGC6_AON_?           (bit30 = 0xcb00 gate)" },
+	{ 0x118f78, "PGC6_AON_?           (bit30 = 0xcb00 gate; app08 also CLEARS it)" },
 	{ 0x11823c, "PGC6_AON_?           (bits[11:10] == 2 expected)" },
 	{ 0x0012e0, "?                    (bit0 == 0 expected)" },
+
+	/* --- SMBPBI mailbox. THERM base is 0x20000 on a GPU and 0x66000 on
+	 * NVSwitch: NV_THERM_I2CS_SCRATCH is 0x200bc (gh100) / 0x660bc (ls10),
+	 * so MSGBOX_COMMAND's block offset 0x0e0 lands here. docs/24. --- */
+	{ 0x0200e0, "THERM_MSGBOX_COMMAND (STATUS[28:24] INTR[31]) — no reference value yet" },
+	{ 0x0200e4, "THERM_MSGBOX_?       (DATA candidate)" },
+	{ 0x0200e8, "THERM_MSGBOX_?       (DATA candidate)" },
 
 	/* --- PCIe advertisement / training --- */
 	{ 0x088084, "XVE_LINK_CAPABILITIES" },
@@ -79,6 +103,17 @@ static const struct reg named[] = {
 	{ 0x08207e4,"FUSE_OPT_?" },
 	{ 0x08207e8,"FUSE_OPT_?" },
 	{ 0x08207ec,"FUSE_OPT_?" },
+	{ 0x0820520,"FUSE_OPT_MAGIC      (app08 ORs 0x200000 in; our write refused)" },
+	{ 0x0820040,"FUSE_EN_SW_OVERRIDE (writable + persistent — the one that takes)" },
+	{ 0x08200fc,"FUSE_OPT_PLM        (all-ones already on a stock A100)" },
+
+	/* --- XP3G per-rate: the tables that are populated on a Gen4 part and
+	 * zero here. Sixteen distinct per-lane values on the A100, so measured
+	 * rather than fuse-mirrored — see docs/25 §3. --- */
+	{ 0x08e010, "XP3G_RATE_LANE0     (A100 = 4)" },
+	{ 0x08e03c, "XP3G_RATE_LANE11    (A100 = 3 — the odd lane)" },
+	{ 0x08e09c, "XP3G_CAL_A0         (A100 = 0x00ba00bd)" },
+	{ 0x08e0c8, "XP3G_CAL_B0         (A100 = 0x00b400c1)" },
 
 	/* --- UPHY / per-lane --- */
 	{ 0x118e80, "UPHY_?" },
@@ -116,6 +151,10 @@ static const struct region regions[] = {
 static const struct region wide[] = {
 	{ 0x0000000, 0x1000, "PMC" },
 	{ 0x0009000, 0x1000, "PTIMER / misc" },
+	/* THERM. GPU base is 0x20000 (gh100 NV_THERM_I2CS_SCRATCH 0x200bc);
+	 * the SMBPBI mailbox is at 0x200e0. Never captured before, so there is
+	 * no reference value for it on an uncrippled part. docs/24. */
+	{ 0x0020000, 0x1000, "THERM (SMBPBI mailbox at 0x200e0)" },
 	{ 0x0021000, 0x1000, "legacy fuse base (priv-blocked on GA100)" },
 	/* One contiguous span rather than separate XVE/XP/XP3G windows. The
 	 * advertise path is scattered across it -- 0x88488, 0x8814c, 0x88150,
@@ -179,6 +218,7 @@ int main(int argc, char **argv)
 	char bdf[512], path[1024];
 	unsigned ven = 0, dev = 0;
 	int fd, is_wide = 0, want_rom = 0, i;
+	const char *label = "unlabelled";
 	const struct region *rlist = regions;
 	size_t rcount = sizeof regions / sizeof *regions;
 
@@ -188,6 +228,8 @@ int main(int argc, char **argv)
 			is_wide = 1;
 		else if (!strcmp(argv[i], "--rom"))
 			want_rom = 1;
+		else if (!strcmp(argv[i], "--label") && i + 1 < argc)
+			label = argv[++i];
 		else
 			snprintf(bdf, sizeof bdf, "%s", argv[i]);
 	}
@@ -226,6 +268,8 @@ int main(int argc, char **argv)
 
 	printf("# ga100-bar0-dump\n");
 	printf("# bdf=%s id=%04x:%04x boot0=0x%08x\n", bdf, ven, dev, rd(0));
+	printf("# label=%s nvidia_loaded=%s\n", label,
+	       access("/sys/module/nvidia", F_OK) == 0 ? "yes" : "no");
 	printf("# read-only; diff two of these directly\n\n");
 
 	/* SXM4 modules expose no PCI expansion ROM BAR, so sysfs .../rom does not
@@ -283,11 +327,46 @@ int main(int argc, char **argv)
 		printf("LnkCtl2 target_speed   = %u\n", ctl2 & 0xf);
 		printf("LnkSta  cur_speed      = %u  width = %u\n",
 		       sta >> 16 & 0xf, sta >> 20 & 0x3f);
-		printf("0x118f78 bit30         = %u   <-- DECISIVE\n", (f78 >> 30) & 1);
+		printf("0x118f78 bit30         = %u   <-- DECISIVE (compare S0 vs S1:\n",
+		       (f78 >> 30) & 1);
+		printf("                             app08 clears this bit, so 0 at S1\n");
+		printf("                             does not mean 0 at S0)\n");
 		printf("0x11823c bits[11:10]   = %u\n", (f23c >> 10) & 3);
 		printf("0x12e0   bit0          = %u\n", rd(0x12e0) & 1);
 		printf("0x118e90 == 0x00068c00 = %s\n",
 		       rd(0x118e90) == 0x00068c00 ? "yes (0xcb00 ran)" : "no");
+
+		{
+			uint32_t gfw = rd(0x118234);
+			printf("GFW_BOOT progress      = 0x%02x  %s\n", gfw & 0xff,
+			       (gfw & 0xff) == 0xff ? "COMPLETED" : "IN PROGRESS / pre-devinit");
+		}
+
+		{
+			uint32_t mb = rd(0x200e0);
+			printf("MSGBOX 0x200e0         = 0x%08x  %s\n", mb,
+			       (mb >> 16) == 0xBADFu ? "walled from this context" :
+			       mb == 0xFFFFFFFFu     ? "no decode" :
+			                               "reachable — STATUS=[28:24] INTR=[31]");
+		}
+
+		/* The per-rate set is the whole question: populated on a Gen4 part,
+		 * zero on the 170HX. Counting it per capture is how S0/S1/S2 answer
+		 * whether GFW boot, GSP-RM, or the trained rate populates it. */
+		{
+			unsigned rates = 0, cal = 0;
+			uint32_t o;
+
+			for (o = 0x8e010; o <= 0x8e04c; o += 4)
+				if (rd(o) != 0) rates++;
+			for (o = 0x8e09c; o <= 0x8e0a8; o += 4)
+				if (rd(o) != 0) cal++;
+			for (o = 0x8e0c8; o <= 0x8e0d4; o += 4)
+				if (rd(o) != 0) cal++;
+			printf("XP3G per-rate          = rates %u/16  cal %u/8   %s\n",
+			       rates, cal,
+			       (rates || cal) ? "POPULATED" : "empty");
+		}
 	}
 
 	for (size_t i = 0; i < rcount; i++) {

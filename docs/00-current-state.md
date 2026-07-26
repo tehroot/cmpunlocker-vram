@@ -241,6 +241,12 @@ Each of these cost a wrong conclusion before it was understood.
   `0x82382c` (A100 `1` / here `0xa`). `0x823824` is `0x00000001` on **both**.
 - **In-range is not verification.** "8 of 9 gadget addresses fall inside the
   image" was near-vacuous: any 16-bit value under `0xeb00` passes.
+- **A single post-init snapshot cannot answer a question about a sequence.**
+  Every capture taken before 2026-07 is state S1. `0x118f78` bit 30 reads `0` on
+  both parts *after* init — and app08 contains two functions that clear that very
+  bit, so "0 afterwards" and "never set" are different observations and only the
+  first was ever made. Capture in states (`recon/capture-states.sh`); `rmmod` is
+  not S0, because GSP has already run.
 
 ---
 
@@ -248,8 +254,8 @@ Each of these cost a wrong conclusion before it was understood.
 
 | path | purpose |
 |---|---|
-| `recon/ga100-bar0-dump.c` | read-only BAR0 capture; `--wide` = 18510 lines; `--rom` reads the PROM aperture |
-| — | **gap:** `--wide` does not cover `0x20000` (THERM), so there is no reference value for the SMBPBI mailbox at `0x200e0`. Add `{ 0x0020000, 0x1000, "THERM" }` before the next capture |
+| `recon/ga100-bar0-dump.c` | read-only BAR0 capture; `--wide`, `--rom`, `--label`. Now covers `0x20000` (THERM / SMBPBI mailbox) and decodes the phase witnesses and the XP3G per-rate population count |
+| `recon/capture-states.sh` | S0 / S1 / S2 boot-state ladder — captures BAR0 *in states*, which is what settles `0x118f78` bit 30 and what populates the per-rate set |
 | `recon/kmod/` | kmod fallback where `iomem=relaxed` is unavailable |
 | `recon/dump-diff.sh` | masked diff of two captures |
 | `recon/volatile-offsets*.txt` | volatility masks |
